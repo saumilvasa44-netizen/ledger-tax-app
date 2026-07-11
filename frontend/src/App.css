@@ -350,3 +350,128 @@ body {
   margin-top: 18px;
   padding: 0 4px;
 }
+
+/* ---------- UPLOAD SECTION ---------- */
+
+.upload-group {
+  background: var(--surface-raised);
+}
+
+.upload-note {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  margin: 0 0 16px;
+}
+
+.upload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+  padding-bottom: 8px;
+}
+
+@media (max-width: 560px) {
+  .upload-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.upload-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  padding: 12px;
+}
+
+.upload-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.upload-label span {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.upload-label small {
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+}
+
+.upload-slot input[type="file"] {
+  font-family: var(--font-body);
+  font-size: 0.76rem;
+  color: var(--ink-muted);
+}
+
+.upload-status {
+  color: var(--emerald);
+  font-size: 0.72rem;
+}
+
+.group-subtitle {
+  font-size: 0.76rem;
+  color: var(--ink-muted);
+  margin: -6px 0 10px;
+}
+
+/* ---------- AGE SELECT ---------- */
+
+.age-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+
+.age-select label {
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.age-select select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--ink);
+  padding: 10px 12px;
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+}
+
+/* ---------- DUAL STUB COMPARISON ---------- */
+
+.stub-head-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.stub-fy-label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.stub-column .stub {
+  margin-bottom: 22px;
+}
+
+.stub-best {
+  border-color: var(--gold);
+}
+
+.best-tag {
+  font-family: var(--font-body);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--gold);
+  color: #241b0a;
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-weight: 700;
+}
