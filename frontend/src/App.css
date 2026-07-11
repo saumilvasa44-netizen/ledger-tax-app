@@ -1,0 +1,352 @@
+:root {
+  --bg: #0F1210;
+  --surface: #171B18;
+  --surface-raised: #1D231E;
+  --border: #2A322C;
+  --ink: #EDEFEA;
+  --ink-muted: #93998F;
+  --emerald: #4CA97A;
+  --emerald-soft: rgba(76, 169, 122, 0.14);
+  --gold: #C9A467;
+  --rose: #C77B6B;
+
+  --font-display: "Fraunces", serif;
+  --font-body: "Inter", -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+
+.page {
+  min-height: 100vh;
+  padding: 56px 24px 80px;
+}
+
+.masthead {
+  max-width: 1040px;
+  margin: 0 auto 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(2.4rem, 5vw, 3.4rem);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.tagline {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  color: var(--ink-muted);
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.layout {
+  max-width: 1040px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 40px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- FORM COLUMN ---------- */
+
+.fy-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.fy-toggle label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fy-toggle input {
+  accent-color: var(--emerald);
+}
+
+.fy-toggle label:has(input:checked) {
+  background: var(--emerald-soft);
+  color: var(--ink);
+}
+
+.entry-group {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px 8px;
+  margin-bottom: 20px;
+  background: var(--surface);
+}
+
+.entry-group legend {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+  padding: 0 8px;
+  color: var(--ink);
+}
+
+.entry-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.entry-row:first-of-type {
+  border-top: none;
+}
+
+.entry-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.entry-label span {
+  font-size: 0.92rem;
+}
+
+.entry-label small {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+
+.entry-input {
+  display: flex;
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 160px;
+}
+
+.rupee {
+  font-family: var(--font-mono);
+  color: var(--ink-muted);
+  margin-right: 6px;
+}
+
+.entry-input input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  width: 100%;
+  text-align: right;
+}
+
+.entry-input:focus-within {
+  border-color: var(--emerald);
+}
+
+.action-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.btn-primary {
+  font-family: var(--font-body);
+  font-weight: 600;
+  background: var(--emerald);
+  color: #08150E;
+  border: none;
+  border-radius: 9px;
+  padding: 13px 28px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btn-ghost {
+  font-family: var(--font-body);
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 13px 22px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.btn-ghost:hover {
+  color: var(--ink);
+  border-color: var(--ink-muted);
+}
+
+.error-note {
+  color: var(--rose);
+  font-size: 0.85rem;
+  margin-top: 14px;
+}
+
+/* ---------- RECEIPT STUB COLUMN ---------- */
+
+.stub-column {
+  position: sticky;
+  top: 40px;
+}
+
+.stub {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 28px 26px 22px;
+  position: relative;
+  font-family: var(--font-mono);
+  transition: border-color 0.2s;
+}
+
+.stub-filled {
+  border-color: var(--emerald);
+}
+
+.stub-notch {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 12px;
+  background-image: radial-gradient(circle at 12px 0, transparent 6px, var(--bg) 6.5px);
+  background-size: 24px 12px;
+  background-repeat: repeat-x;
+}
+
+.stub-notch-bottom {
+  top: auto;
+  bottom: -1px;
+  background-image: radial-gradient(circle at 12px 12px, transparent 6px, var(--bg) 6.5px);
+}
+
+.stub-head {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  border-bottom: 1px dashed var(--border);
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+}
+
+.stub-placeholder {
+  font-family: var(--font-body);
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  padding: 20px 0 30px;
+}
+
+.stub-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+  padding: 7px 0;
+}
+
+.figure {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.stub-divider {
+  border-top: 1px dashed var(--border);
+  margin: 14px 0;
+}
+
+.stub-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  font-weight: 600;
+  padding-bottom: 6px;
+}
+
+.figure-large {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.figure-large.payable {
+  color: var(--gold);
+}
+
+.figure-large.refund {
+  color: var(--emerald);
+}
+
+.disclaimer {
+  font-family: var(--font-body);
+  font-size: 0.74rem;
+  line-height: 1.6;
+  color: var(--ink-muted);
+  margin-top: 18px;
+  padding: 0 4px;
+}
