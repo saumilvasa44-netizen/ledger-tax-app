@@ -5,14 +5,14 @@ const API_URL = "https://ledger-tax-app.onrender.com";
 
 const TREATMENT_LABELS = {
   slab_other_income: { label: "Taxed at slab rate", cls: "tag-slab" },
-  vda_flat30: { label: "Flat 30% (VDA — Sec 115BBH)", cls: "tag-vda" },
-  non_income: { label: "Not income — excluded", cls: "tag-noincome" },
-  capital_gains_needs_review: { label: "Capital gains — needs manual review", cls: "tag-review" },
-  needs_review: { label: "Unrecognized — needs manual review", cls: "tag-review" },
+  vda_flat30: { label: "Flat 30% (VDA - Sec 115BBH)", cls: "tag-vda" },
+  non_income: { label: "Not income - excluded", cls: "tag-noincome" },
+  capital_gains_needs_review: { label: "Capital gains - needs manual review", cls: "tag-review" },
+  needs_review: { label: "Unrecognized - needs manual review", cls: "tag-review" },
 };
 
 function formatINR(value) {
-  if (value === null || value === undefined) return "—";
+  if (value === null || value === undefined) return "-";
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
@@ -59,7 +59,7 @@ export default function App() {
       if (tisFile) fd.append("tis", tisFile);
 
       const res = await fetch(`${API_URL}/full-analysis`, { method: "POST", body: fd });
-      if (!res.ok) throw new Error("Analysis failed — check the API is running.");
+      if (!res.ok) throw new Error("Analysis failed - check the API is running.");
       const data = await res.json();
       setResult(data);
     } catch (err) {
@@ -110,11 +110,11 @@ export default function App() {
 
         <div className="analysis-row">
           <span>Less: TDS from salary (per documents)</span>
-          <span className="figure">− {formatINR(result.tds.salary_tds_used)}</span>
+          <span className="figure">- {formatINR(result.tds.salary_tds_used)}</span>
         </div>
         <div className="analysis-row">
           <span>Less: TDS from other income (per AIS)</span>
-          <span className="figure">− {formatINR(result.tds.other_sources_tds)}</span>
+          <span className="figure">- {formatINR(result.tds.other_sources_tds)}</span>
         </div>
 
         <div className="analysis-row analysis-subtotal">
@@ -154,16 +154,16 @@ export default function App() {
   return (
     <div className="page">
       <header className="masthead">
-        <span className="eyebrow">For Salaried Employees · Old &amp; New Regime · Not Financial Advice</span>
+        <span className="eyebrow">For Salaried Employees - Old &amp; New Regime - Not Financial Advice</span>
         <h1 className="wordmark">Tax Calculator</h1>
-        <p className="tagline">Built for salaried employees — payslips, Form 16, AIS &amp; TIS, reconciled.</p>
+        <p className="tagline">Built for salaried employees - payslips, Form 16, AIS &amp; TIS, reconciled.</p>
       </header>
 
       <div className="two-col-layout">
         {/* ---------------- LEFT COLUMN: ALL INPUTS ---------------- */}
         <div className="left-col">
           <fieldset className="entry-group upload-group">
-            <legend>Step 1 — Payslips</legend>
+            <legend>Step 1 - Payslips</legend>
             <p className="upload-note">Upload all your monthly payslips. Their gross earnings will be summed.</p>
             <input
               type="file"
@@ -175,7 +175,7 @@ export default function App() {
           </fieldset>
 
           <fieldset className="entry-group upload-group">
-            <legend>Step 2 — Form 16</legend>
+            <legend>Step 2 - Form 16</legend>
             <p className="upload-note">
               Authoritative for gross salary and salary TDS. Any gap vs. your payslips (e.g. perquisites) is
               automatically identified and added.
@@ -185,9 +185,9 @@ export default function App() {
           </fieldset>
 
           <fieldset className="entry-group upload-group">
-            <legend>Step 3 — AIS &amp; TIS</legend>
+            <legend>Step 3 - AIS &amp; TIS</legend>
             <p className="upload-note">
-              Every income category is categorized per the Income Tax Act — some AIS/TIS entries (like fund
+              Every income category is categorized per the Income Tax Act - some AIS/TIS entries (like fund
               purchases or foreign remittances) aren't actually taxable income and are excluded automatically.
             </p>
             <div className="upload-grid">
@@ -227,16 +227,16 @@ export default function App() {
           <fieldset className="entry-group">
             <legend>NPS &amp; Advance Tax</legend>
             <div className="entry-row">
-              <div className="entry-label"><span>Employer NPS — 80CCD(2)</span><small>Allowed in both regimes</small></div>
+              <div className="entry-label"><span>Employer NPS - 80CCD(2)</span><small>Allowed in both regimes</small></div>
               <div className="entry-input">
-                <span className="rupee">₹</span>
+                <span className="rupee">Rs. </span>
                 <input type="number" placeholder="0" value={details.nps_employer} onChange={(e) => handleDetailChange("nps_employer", e.target.value)} />
               </div>
             </div>
             <div className="entry-row">
               <div className="entry-label"><span>Advance tax already paid</span><small>If any</small></div>
               <div className="entry-input">
-                <span className="rupee">₹</span>
+                <span className="rupee">Rs. </span>
                 <input type="number" placeholder="0" value={details.advance_tax} onChange={(e) => handleDetailChange("advance_tax", e.target.value)} />
               </div>
             </div>
@@ -253,7 +253,7 @@ export default function App() {
               <div className="entry-row" key={key}>
                 <div className="entry-label"><span>{label}</span></div>
                 <div className="entry-input">
-                  <span className="rupee">₹</span>
+                  <span className="rupee">Rs. </span>
                   <input type="number" placeholder="0" value={details[key]} onChange={(e) => handleDetailChange(key, e.target.value)} />
                 </div>
               </div>
@@ -264,16 +264,16 @@ export default function App() {
             <legend>Chapter VI-A deductions</legend>
             <p className="group-subtitle">Only reduce tax under the Old Regime</p>
             {[
-              ["ded_80c", "80C (PF, ELSS, LIC…)"],
-              ["ded_80ccd1b", "80CCD(1B) — NPS additional"],
-              ["ded_80d", "80D — Medical insurance"],
+              ["ded_80c", "80C (PF, ELSS, LIC...)"],
+              ["ded_80ccd1b", "80CCD(1B) - NPS additional"],
+              ["ded_80d", "80D - Medical insurance"],
               ["ded_80tta_ttb", "80TTA / 80TTB"],
-              ["ded_other", "Other (80E, 80G, 80EEA…)"],
+              ["ded_other", "Other (80E, 80G, 80EEA...)"],
             ].map(([key, label]) => (
               <div className="entry-row" key={key}>
                 <div className="entry-label"><span>{label}</span></div>
                 <div className="entry-input">
-                  <span className="rupee">₹</span>
+                  <span className="rupee">Rs. </span>
                   <input type="number" placeholder="0" value={details[key]} onChange={(e) => handleDetailChange(key, e.target.value)} />
                 </div>
               </div>
@@ -282,7 +282,7 @@ export default function App() {
 
           <div className="action-row">
             <button className="btn-primary" onClick={handleAnalyze} disabled={loading}>
-              {loading ? "Analyzing…" : "Analyze & Calculate"}
+              {loading ? "Analyzing..." : "Analyze & Calculate"}
             </button>
             <button className="btn-ghost" onClick={handleReset}>Reset</button>
           </div>
@@ -297,7 +297,7 @@ export default function App() {
               <div className="empty-results">
                 <p className="stub-placeholder">
                   Upload your documents and fill in the details on the left, then click
-                  <strong> "Analyze &amp; Calculate"</strong> — your full reconciliation and both regimes'
+                  <strong> "Analyze &amp; Calculate"</strong> - your full reconciliation and both regimes'
                   results will appear here.
                 </p>
               </div>
@@ -306,7 +306,7 @@ export default function App() {
             {result && (
               <>
                 <div className="date-note">
-                  📅 Calculated as of {result.calculation_date} — {result.itr_due_date_note}
+                  [Date] Calculated as of {result.calculation_date} - {result.itr_due_date_note}
                 </div>
 
                 <div className={`compare-card ${salaryMatches ? "compare-match" : "compare-mismatch"}`}>
@@ -330,4 +330,67 @@ export default function App() {
                 </div>
 
                 <div className="compare-card compare-match">
-                  <div className="compare-title">TDS
+                  <div className="compare-title">TDS Reconciliation</div>
+                  <div className="compare-row">
+                    <span>Payslip TDS total (summed)</span>
+                    <span className="figure">{formatINR(result.tds.payslip_tds_total)}</span>
+                  </div>
+                  <div className="compare-row">
+                    <span>Form 16 / AIS salary TDS</span>
+                    <span className="figure">{formatINR(result.tds.form16_tds)}</span>
+                  </div>
+                  <div className="compare-row analysis-subtotal">
+                    <span>Salary TDS used</span>
+                    <span className="figure">{formatINR(result.tds.salary_tds_used)}</span>
+                  </div>
+                  <div className="compare-row">
+                    <span>+ TDS on other income (from AIS)</span>
+                    <span className="figure">{formatINR(result.tds.other_sources_tds)}</span>
+                  </div>
+                  <div className="compare-row analysis-subtotal">
+                    <span>Total TDS paid</span>
+                    <span className="figure">{formatINR(result.tds.total_tds)}</span>
+                  </div>
+                </div>
+
+                {result.other_income_items.length > 0 && (
+                  <div className="compare-card compare-match">
+                    <div className="compare-title">Other Income - Categorized per Income Tax Act</div>
+                    <table className="income-table">
+                      <tbody>
+                        {result.other_income_items.map((item, i) => {
+                          const t = TREATMENT_LABELS[item.treatment] || TREATMENT_LABELS.needs_review;
+                          return (
+                            <tr key={i}>
+                              <td>{item.category}</td>
+                              <td className="figure">{formatINR(item.amount)}</td>
+                              <td><span className={`income-tag ${t.cls}`}>{t.label}</span></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {result.vda_income_total > 0 && <p className="compare-note">{result.vda_caveat}</p>}
+                  </div>
+                )}
+
+                <div className="stub-head-row">
+                  <span className="stub-fy-label">{fy}</span>
+                </div>
+                {renderRegimeCard("New Regime", result.new_regime)}
+                {renderRegimeCard("Old Regime", result.old_regime)}
+
+                <p className="disclaimer">
+                  For personal tracking only. Not a substitute for filing your ITR or advice from a CA.
+                  234B/234C interest figures are simplified estimates - the actual computation during
+                  assessment may differ based on exact payment timing. Does not account for capital gains
+                  (flagged separately if detected), house property income, or surcharge on very high incomes.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
