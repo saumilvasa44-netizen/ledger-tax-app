@@ -1,5 +1,6 @@
 import io
 import re
+from datetime import datetime, date
 
 import pdfplumber
 from fastapi import FastAPI, UploadFile, File, Form
@@ -50,27 +51,27 @@ class TaxInput(BaseModel):
 
 
 class RegimeResult(BaseModel):
-    taxable_income: float
-    base_tax: float
-    tax_with_cess: float
-    net_payable: float
+    taxable_income: int
+    base_tax: int
+    tax_with_cess: int
+    net_payable: int
     is_refund: bool
 
 
 class TaxResult(BaseModel):
     new_regime: RegimeResult
     old_regime: RegimeResult
-    total_tds_paid: float
+    total_tds_paid: int
     better_regime: str  # "new" | "old" | "same"
 
 
 class ExtractedFields(BaseModel):
     doc_type: str
-    gross_salary: float | None = None
-    tds: float | None = None
-    sb_interest: float | None = None
-    fd_interest: float | None = None
-    dividend_income: float | None = None
+    gross_salary: int | None = None
+    tds: int | None = None
+    sb_interest: int | None = None
+    fd_interest: int | None = None
+    dividend_income: int | None = None
     raw_text_preview: str = ""
 
 
@@ -144,10 +145,10 @@ def build_regime_result(taxable_income: float, base_tax: float, total_tds_paid: 
     tax_with_cess = base_tax * 1.04
     net = tax_with_cess - total_tds_paid
     return RegimeResult(
-        taxable_income=round(taxable_income, 2),
-        base_tax=round(base_tax, 2),
-        tax_with_cess=round(tax_with_cess, 2),
-        net_payable=round(abs(net), 2),
+        taxable_income=round(taxable_income),
+        base_tax=round(base_tax),
+        tax_with_cess=round(tax_with_cess),
+        net_payable=round(abs(net)),
         is_refund=net < 0,
     )
 
@@ -190,7 +191,7 @@ def calculate_tax(data: TaxInput):
     return TaxResult(
         new_regime=new_result,
         old_regime=old_result,
-        total_tds_paid=round(total_tds_paid, 2),
+        total_tds_paid=round(total_tds_paid),
         better_regime=better,
     )
 
@@ -204,6 +205,12 @@ def to_float(raw: str):
         return float(raw.replace(",", ""))
     except ValueError:
         return None
+
+
+def _round_or_none(value):
+    """Round to whole rupees, matching how amounts appear on the actual
+    AIS/TIS/Form16/payslip documents — no decimal places."""
+    return round(value) if value is not None else None
 
 
 def extract_tis_category(text: str, category_name: str):
@@ -278,6 +285,38 @@ TDS_PATTERNS = [
 ]
 
 
+def extract_form16_figures(text: str):
+    """Form 16 Part A has a reliable single-line summary:
+    'Total (Rs.)  <amount paid/credited>  <TDS deducted>  <TDS deposited>'
+    which is far more consistent across employers than trying to match
+    'Gross Salary' labels (those often sit on a different line than their
+    number, due to how the PDF's table columns get extracted)."""
+    match = re.search(
+        r"Total\s*\(Rs\.\)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)", text
+    )
+    if match:
+        gross_salary = to_float(match.group(1))
+        tds_deposited = to_float(match.group(3))
+        return gross_salary, tds_deposited
+
+    # Fallback: cross-line label matching for Form 16 layouts without that summary row
+    gross_salary = None
+    tds = None
+    gross_match = re.search(
+        r"Total amount of salary received from current employer.*?(\d[\d,]{3,}\.\d{2})",
+        text, re.DOTALL,
+    )
+    if gross_match:
+        gross_salary = to_float(gross_match.group(1))
+    tds_match = re.search(
+        r"Tax deducted from salary of the employee.*?(\d[\d,]{3,}\.\d{2})",
+        text, re.DOTALL,
+    )
+    if tds_match:
+        tds = to_float(tds_match.group(1))
+    return gross_salary, tds
+
+
 def find_amount(text: str, patterns: list[str]):
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -313,24 +352,374 @@ async def extract_document(file: UploadFile = File(...), doc_type: str = Form(..
     result = ExtractedFields(doc_type=doc_type, raw_text_preview=text[:300])
 
     if doc_type == "payslip":
-        result.gross_salary = find_amount(text, GROSS_SALARY_PATTERNS)
-        result.tds = find_amount(text, TDS_PATTERNS)
+        result.gross_salary = _round_or_none(find_amount(text, GROSS_SALARY_PATTERNS))
+        result.tds = _round_or_none(find_amount(text, TDS_PATTERNS))
 
     elif doc_type == "form16":
-        result.gross_salary = find_amount(text, GROSS_SALARY_PATTERNS)
-        result.tds = find_amount(text, TDS_PATTERNS)
+        gross_salary, tds = extract_form16_figures(text)
+        result.gross_salary = _round_or_none(gross_salary)
+        result.tds = _round_or_none(tds)
 
     elif doc_type == "tis":
-        result.gross_salary = extract_tis_category(text, "Salary")
-        result.sb_interest = extract_tis_category(text, "Interest from savings bank")
-        result.fd_interest = extract_tis_category(text, "Interest from deposit")
-        result.dividend_income = extract_tis_category(text, "Dividend")
+        result.gross_salary = _round_or_none(extract_tis_category(text, "Salary"))
+        result.sb_interest = _round_or_none(extract_tis_category(text, "Interest from savings bank"))
+        result.fd_interest = _round_or_none(extract_tis_category(text, "Interest from deposit"))
+        result.dividend_income = _round_or_none(extract_tis_category(text, "Dividend"))
 
     elif doc_type == "ais":
-        result.gross_salary = extract_ais_gross_salary(text)
-        result.tds = sum_salary_tds_deposited(text)
-        result.sb_interest = sum_ais_lines_containing(text, "SFT-016(SB)")
-        result.fd_interest = sum_ais_lines_containing(text, "SFT-016(TD)")
-        result.dividend_income = sum_ais_lines_containing(text, "Dividend")
+        result.gross_salary = _round_or_none(extract_ais_gross_salary(text))
+        result.tds = _round_or_none(sum_salary_tds_deposited(text))
+        result.sb_interest = _round_or_none(sum_ais_lines_containing(text, "SFT-016(SB)"))
+        result.fd_interest = _round_or_none(sum_ais_lines_containing(text, "SFT-016(TD)"))
+        result.dividend_income = _round_or_none(sum_ais_lines_containing(text, "Dividend"))
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# FULL ANALYSIS: reconcile payslips vs Form 16, categorize every AIS/TIS
+# income item per the Income Tax Act, compute salary + other-sources TDS
+# separately, and estimate 234B/234C interest.
+# ---------------------------------------------------------------------------
+
+# How each TIS category should be treated under the Income Tax Act.
+# IMPORTANT: not everything reported in AIS/TIS is taxable income —
+# "purchase of securities" and "outward remittance" are informational only.
+TIS_CATEGORY_RULES = [
+    (["salary"], "salary"),
+    (["interest from savings bank"], "slab_other_income"),
+    (["interest from deposit"], "slab_other_income"),
+    (["dividend"], "slab_other_income"),
+    (["receipts on transfer of virtual digital asset"], "vda_flat30"),
+    (["purchase of securities", "purchase of immovable", "cash withdrawal", "cash deposit"], "non_income"),
+    (["outward foreign remittance"], "non_income"),
+    (["sale of securities", "sale of immovable", "capital gain"], "capital_gains_needs_review"),
+]
+
+
+def categorize_tis_category(name: str) -> str:
+    name_lower = name.lower()
+    for keywords, treatment in TIS_CATEGORY_RULES:
+        if any(kw in name_lower for kw in keywords):
+            return treatment
+    return "needs_review"
+
+
+def extract_tis_all_categories(text: str):
+    """Parse every row of TIS's summary table (restricted to the summary
+    section only — the detailed Annexure pages repeat similar-looking rows
+    that would otherwise be mistakenly picked up)."""
+    summary_section = text.split("Annexure to Taxpayer Information Summary")[0]
+    pattern = r"^(\d+)\s+(.+?)\s+([\d,]+)\s+([\d,]+)$"
+    rows = []
+    for line in summary_section.splitlines():
+        match = re.match(pattern, line.strip())
+        if match:
+            _, category, processed, accepted = match.groups()
+            rows.append({"category": category.strip(), "amount": to_float(accepted)})
+    return rows
+
+
+def split_ais_salary_vs_other_tds(text: str):
+    """AIS lists TDS as repeating quarterly rows under each category section.
+    Split the document into the Salary section vs everything after it, and
+    sum the 'TDS DEPOSITED' column separately for each."""
+    salary_start = text.find("Salary\n")
+    if salary_start == -1:
+        return None, None
+
+    # Find the next category header after Salary to bound the salary block.
+    next_headers = ["Interest from deposit", "Interest from savings bank", "Receipts on transfer"]
+    next_positions = [text.find(h, salary_start + 7) for h in next_headers]
+    next_positions = [p for p in next_positions if p != -1]
+    salary_end = min(next_positions) if next_positions else len(text)
+
+    salary_block = text[salary_start:salary_end]
+    rest_block = text[salary_end:]
+
+    def sum_quarterly(block):
+        total = 0.0
+        found = False
+        for line in block.splitlines():
+            if re.match(r"^\d+\s+Q\d\(", line.strip()):
+                numbers = re.findall(r"[\d,]+", line)
+                if len(numbers) >= 4:
+                    total += to_float(numbers[-1])
+                    found = True
+        return total if found else None
+
+    return sum_quarterly(salary_block), sum_quarterly(rest_block)
+
+
+def months_elapsed_since_fy_start(fy_string: str, today=None) -> int:
+    """Months from 1 April of the Assessment Year to today — part of a month
+    counts as a full month, per Section 234B."""
+    today = today or datetime.now().date()
+    ay_start = date(2026, 4, 1) if "2025-26" in fy_string else date(2025, 4, 1)
+    if today < ay_start:
+        return 0
+    months = (today.year - ay_start.year) * 12 + (today.month - ay_start.month)
+    if today.day > ay_start.day:
+        months += 1
+    return max(0, months)
+
+
+def compute_234b(assessed_tax: float, tax_already_paid: float, fy_string: str):
+    """Simplified estimate: 1% per month on the shortfall, from 1 April of
+    the assessment year to today — 'today' being whenever this app is being
+    used, so the estimate naturally grows the later in the year you check it,
+    and shows 0 if you're not actually short. If advance tax + TDS covers at
+    least 90% of the assessed tax, or the shortfall is ≤ ₹10,000, no interest
+    applies (per the Section 234B rule itself)."""
+    months = months_elapsed_since_fy_start(fy_string)
+    if assessed_tax - tax_already_paid <= 10000:
+        return 0, months
+    if tax_already_paid >= 0.9 * assessed_tax:
+        return 0, months
+    shortfall = assessed_tax - tax_already_paid
+    return round(shortfall * 0.01 * months), months
+
+
+def compute_234c(assessed_tax: float, total_tds: float):
+    """Simplified estimate against the four advance-tax installment
+    checkpoints (15%/45%/75%/100% by 15 Jun/Sep/Dec/Mar). TDS is treated as
+    paid evenly across the year, which is the standard legal assumption —
+    separately-paid advance tax beyond TDS isn't modeled here, since most
+    salaried taxpayers rely on TDS alone. This is an approximation; the
+    actual computation by the IT Department during processing may differ."""
+    checkpoints = [(0.15, 3, 3 / 12), (0.45, 3, 6 / 12), (0.75, 3, 9 / 12), (1.00, 1, 12 / 12)]
+    total_interest = 0.0
+    for required_pct, months, tds_deemed_fraction in checkpoints:
+        required = assessed_tax * required_pct
+        deemed_paid = total_tds * tds_deemed_fraction
+        shortfall = max(0, required - deemed_paid)
+        total_interest += shortfall * 0.01 * months
+    return round(total_interest)
+
+
+class IncomeItem(BaseModel):
+    category: str
+    amount: int
+    treatment: str  # slab_other_income | vda_flat30 | non_income | capital_gains_needs_review | needs_review
+    included_in_tax: bool
+
+
+class SalaryReconciliation(BaseModel):
+    payslip_total: int | None
+    form16_total: int | None
+    additional_income_identified: int
+    final_gross_salary: int
+
+
+class TDSReconciliation(BaseModel):
+    payslip_tds_total: int | None
+    form16_tds: int | None
+    salary_tds_used: int
+    other_sources_tds: int
+    total_tds: int
+
+
+class RegimeFullResult(BaseModel):
+    taxable_income: int
+    slab_tax_with_cess: int
+    vda_tax_with_cess: int
+    total_tax: int
+    total_tds_paid: int
+    net_before_interest: int
+    interest_234b: int
+    interest_234c: int
+    months_elapsed_234b: int
+    final_amount: int
+    is_refund: bool
+
+
+class FullAnalysisResult(BaseModel):
+    salary: SalaryReconciliation
+    tds: TDSReconciliation
+    other_income_items: list[IncomeItem]
+    vda_income_total: int
+    slab_other_income_total: int
+    non_income_total: int
+    new_regime: RegimeFullResult
+    old_regime: RegimeFullResult
+    vda_caveat: str
+    calculation_date: str
+    itr_due_date_note: str
+
+
+@app.post("/full-analysis", response_model=FullAnalysisResult)
+async def full_analysis(
+    fy: str = Form(...),
+    age_group: str = Form("Below 60"),
+    nps_employer: float = Form(0.0),
+    hra_exemption: float = Form(0.0),
+    lta_exemption: float = Form(0.0),
+    other_exemptions: float = Form(0.0),
+    ded_80c: float = Form(0.0),
+    ded_80ccd1b: float = Form(0.0),
+    ded_80d: float = Form(0.0),
+    ded_80tta_ttb: float = Form(0.0),
+    ded_other: float = Form(0.0),
+    advance_tax: float = Form(0.0),
+    payslips: list[UploadFile] = File(default=[]),
+    form16: UploadFile | None = File(default=None),
+    ais: UploadFile | None = File(default=None),
+    tis: UploadFile | None = File(default=None),
+):
+    # --- Salary reconciliation: payslips vs Form 16 ---
+    payslip_total = None
+    payslip_tds_total = None
+    if payslips:
+        total_gross, total_tds, found = 0.0, 0.0, False
+        for f in payslips:
+            text = extract_pdf_text(await f.read())
+            g = find_amount(text, GROSS_SALARY_PATTERNS)
+            t = find_amount(text, TDS_PATTERNS)
+            if g:
+                total_gross += g
+                found = True
+            if t:
+                total_tds += t
+        payslip_total = round(total_gross) if found else None
+        payslip_tds_total = round(total_tds) if total_tds else None
+
+    form16_gross, form16_tds = None, None
+    if form16:
+        text = extract_pdf_text(await form16.read())
+        form16_gross, form16_tds = extract_form16_figures(text)
+        form16_gross = round(form16_gross) if form16_gross else None
+        form16_tds = round(form16_tds) if form16_tds else None
+
+    # Form 16 is authoritative; any excess over the payslip total (e.g.
+    # perquisites, bonuses not reflected on payslips) is surfaced explicitly.
+    if form16_gross is not None:
+        base = payslip_total or 0
+        additional = max(0, form16_gross - base)
+        final_gross_salary = base + additional
+    elif payslip_total is not None:
+        additional = 0
+        final_gross_salary = payslip_total
+    else:
+        additional = 0
+        final_gross_salary = 0
+
+    salary_recon = SalaryReconciliation(
+        payslip_total=payslip_total,
+        form16_total=form16_gross,
+        additional_income_identified=additional,
+        final_gross_salary=final_gross_salary,
+    )
+
+    # --- AIS: split salary TDS vs other-sources TDS ---
+    ais_salary_tds, ais_other_tds = None, None
+    ais_text = ""
+    if ais:
+        ais_text = extract_pdf_text(await ais.read())
+        ais_salary_tds, ais_other_tds = split_ais_salary_vs_other_tds(ais_text)
+
+    salary_tds_used = form16_tds or ais_salary_tds or payslip_tds_total or 0
+    other_sources_tds = round(ais_other_tds) if ais_other_tds else 0
+
+    tds_recon = TDSReconciliation(
+        payslip_tds_total=payslip_tds_total,
+        form16_tds=form16_tds,
+        salary_tds_used=round(salary_tds_used),
+        other_sources_tds=other_sources_tds,
+        total_tds=round(salary_tds_used) + other_sources_tds,
+    )
+
+    # --- TIS: categorize every income item per the Income Tax Act ---
+    other_income_items = []
+    slab_other_income_total = 0.0
+    vda_income_total = 0.0
+    non_income_total = 0.0
+
+    if tis:
+        tis_text = extract_pdf_text(await tis.read())
+        for row in extract_tis_all_categories(tis_text):
+            if row["category"].lower() == "salary" or row["amount"] is None:
+                continue
+            treatment = categorize_tis_category(row["category"])
+            included = treatment in ("slab_other_income", "vda_flat30")
+            other_income_items.append(IncomeItem(
+                category=row["category"], amount=round(row["amount"]),
+                treatment=treatment, included_in_tax=included,
+            ))
+            if treatment == "slab_other_income":
+                slab_other_income_total += row["amount"]
+            elif treatment == "vda_flat30":
+                vda_income_total += row["amount"]
+            elif treatment == "non_income":
+                non_income_total += row["amount"]
+
+    # --- Tax calculation, both regimes ---
+    def calc_regime(is_new_regime: bool) -> RegimeFullResult:
+        if is_new_regime:
+            salary_income = max(0.0, final_gross_salary - STANDARD_DEDUCTION_NEW - nps_employer)
+            taxable_income = max(0.0, salary_income + slab_other_income_total)
+            slab_tax = compute_new_regime_tax(taxable_income, fy)
+        else:
+            total_exemptions = hra_exemption + lta_exemption + other_exemptions
+            total_via = ded_80c + ded_80ccd1b + ded_80d + ded_80tta_ttb + ded_other
+            salary_income = max(0.0, final_gross_salary - total_exemptions - STANDARD_DEDUCTION_OLD - nps_employer)
+            taxable_income = max(0.0, salary_income + slab_other_income_total - total_via)
+            slab_tax = compute_old_regime_tax(taxable_income, age_group)
+
+        slab_tax_with_cess = slab_tax * 1.04
+        # VDA: flat 30% + cess, no deductions, same treatment in both regimes
+        vda_tax_with_cess = vda_income_total * 0.30 * 1.04
+        total_tax = slab_tax_with_cess + vda_tax_with_cess
+
+        total_tds = tds_recon.total_tds
+        net_before_interest = total_tax - total_tds - advance_tax
+
+        if net_before_interest > 0:
+            interest_b, months_b = compute_234b(total_tax, total_tds + advance_tax, fy)
+            interest_c = compute_234c(total_tax, total_tds)
+        else:
+            interest_b, months_b = 0, months_elapsed_since_fy_start(fy)
+            interest_c = 0
+
+        final_amount = net_before_interest + interest_b + interest_c
+
+        return RegimeFullResult(
+            taxable_income=round(taxable_income),
+            slab_tax_with_cess=round(slab_tax_with_cess),
+            vda_tax_with_cess=round(vda_tax_with_cess),
+            total_tax=round(total_tax),
+            total_tds_paid=round(total_tds),
+            net_before_interest=round(net_before_interest),
+            interest_234b=interest_b,
+            interest_234c=interest_c,
+            months_elapsed_234b=months_b,
+            final_amount=round(abs(final_amount)),
+            is_refund=final_amount < 0,
+        )
+
+    today = datetime.now().date()
+    ay_start = date(2026, 4, 1) if "2025-26" in fy else date(2025, 4, 1)
+    itr_due_date = date(ay_start.year, 7, 31)
+    if today <= itr_due_date:
+        due_note = f"Today ({today.strftime('%d %b %Y')}) is before the {itr_due_date.strftime('%d %b %Y')} ITR filing deadline — 234B is calculated only for the months actually elapsed so far, not the full year."
+    else:
+        due_note = f"Today ({today.strftime('%d %b %Y')}) is after the {itr_due_date.strftime('%d %b %Y')} ITR filing deadline — file as soon as possible, additional interest under Section 234A may also apply for late filing (not calculated here)."
+
+    return FullAnalysisResult(
+        salary=salary_recon,
+        tds=tds_recon,
+        other_income_items=other_income_items,
+        vda_income_total=round(vda_income_total),
+        slab_other_income_total=round(slab_other_income_total),
+        non_income_total=round(non_income_total),
+        new_regime=calc_regime(True),
+        old_regime=calc_regime(False),
+        vda_caveat=(
+            "AIS/TIS report the gross transaction value for virtual digital "
+            "assets, not your actual gain or loss. The amount above may "
+            "overstate your real taxable VDA income if your cost basis was "
+            "high, or if this included transfers between your own wallets. "
+            "Verify against your exchange statements before relying on this."
+        ),
+        calculation_date=today.strftime("%d %b %Y"),
+        itr_due_date_note=due_note,
+    )
