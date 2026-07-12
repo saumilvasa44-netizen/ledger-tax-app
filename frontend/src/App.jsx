@@ -7,8 +7,8 @@ const TREATMENT_LABELS = {
   slab_other_income: { label: "Taxed at slab rate", cls: "tag-slab" },
   vda_flat30: { label: "Flat 30% (VDA - Sec 115BBH)", cls: "tag-vda" },
   non_income: { label: "Not income - excluded", cls: "tag-noincome" },
-  capital_gains_needs_review: { label: "Capital gains - needs manual review", cls: "tag-review" },
-  needs_review: { label: "Unrecognized - needs manual review", cls: "tag-review" },
+  capital_gains_needs_review: { label: "Capital gains - review", cls: "tag-review" },
+  needs_review: { label: "Unrecognized - review", cls: "tag-review" },
 };
 
 function formatINR(value) {
@@ -88,62 +88,63 @@ export default function App() {
     result?.salary?.payslip_total != null &&
     result.salary.additional_income_identified === 0;
 
-  const renderRegimeCard = (label, regime) => {
+  const renderRegimeCard = (label, regime, isBest) => {
     if (!regime || !result) return null;
     return (
-      <div className="analysis-card">
-        <div className="analysis-card-head">{label}</div>
+      <div className={`card regime-card ${isBest ? "best" : ""}`}>
+        <div className="regime-head">
+          <span className="regime-name">{label}</span>
+          {isBest && <span className="best-badge">Better for you</span>}
+        </div>
 
-        <div className="analysis-row analysis-headline">
+        <div className="regime-row headline">
           <span>Salary (validated)</span>
           <span className="figure">{formatINR(result.salary.final_gross_salary)}</span>
         </div>
-        <div className="analysis-row analysis-headline">
+        <div className="regime-row headline">
           <span>Other income, all sources (validated)</span>
           <span className="figure">{formatINR(result.slab_other_income_total + result.vda_income_total)}</span>
         </div>
 
-        <div className="analysis-row analysis-subtotal analysis-tax-liability">
-          <span>Tax liability ({label.toLowerCase()} slabs + VDA flat rate)</span>
+        <div className="regime-row liability">
+          <span>Tax liability ({label.toLowerCase()} + VDA flat rate)</span>
           <span className="figure">{formatINR(regime.total_tax)}</span>
         </div>
 
-        <div className="analysis-row">
-          <span>Less: TDS from salary (per documents)</span>
+        <div className="regime-row">
+          <span>Less: TDS from salary</span>
           <span className="figure">- {formatINR(result.tds.salary_tds_used)}</span>
         </div>
-        <div className="analysis-row">
-          <span>Less: TDS from other income (per AIS)</span>
+        <div className="regime-row">
+          <span>Less: TDS from other income</span>
           <span className="figure">- {formatINR(result.tds.other_sources_tds)}</span>
         </div>
 
-        <div className="analysis-row analysis-subtotal">
+        <div className="regime-row subtotal">
           <span>Net amount (before interest)</span>
           <span className="figure">{formatINR(regime.net_before_interest)}</span>
         </div>
 
         {(regime.interest_234b > 0 || regime.interest_234c > 0) ? (
           <>
-            <div className="analysis-row analysis-interest">
-              <span>+ Interest u/s 234B ({regime.months_elapsed_234b} month{regime.months_elapsed_234b === 1 ? "" : "s"} elapsed, estimate)</span>
+            <div className="regime-row interest">
+              <span>+ Interest u/s 234B ({regime.months_elapsed_234b} month{regime.months_elapsed_234b === 1 ? "" : "s"})</span>
               <span className="figure">{formatINR(regime.interest_234b)}</span>
             </div>
-            <div className="analysis-row analysis-interest">
-              <span>+ Interest u/s 234C (estimate)</span>
+            <div className="regime-row interest">
+              <span>+ Interest u/s 234C</span>
               <span className="figure">{formatINR(regime.interest_234c)}</span>
             </div>
           </>
         ) : (
-          <div className="analysis-row analysis-no-interest">
-            <span>234B / 234C interest</span>
-            <span className="figure">Not applicable</span>
+          <div className="regime-row no-interest">
+            <span>234B / 234C interest: Not applicable</span>
           </div>
         )}
 
-        <div className="stub-divider" />
-        <div className="analysis-final">
-          <span>{regime.is_refund ? "Net refundable" : "Net payable"}</span>
-          <span className={`figure figure-large ${regime.is_refund ? "refund" : "payable"}`}>
+        <div className="regime-final">
+          <span className="regime-final-label">{regime.is_refund ? "Net refundable" : "Net payable"}</span>
+          <span className={`regime-final-amount ${regime.is_refund ? "refund" : "payable"}`}>
             {formatINR(regime.final_amount)}
           </span>
         </div>
@@ -154,97 +155,137 @@ export default function App() {
   return (
     <div className="page">
       <header className="masthead">
-        <span className="eyebrow">For Salaried Employees - Old &amp; New Regime - Not Financial Advice</span>
-        <h1 className="wordmark">Tax Calculator</h1>
-        <p className="tagline">Built for salaried employees - payslips, Form 16, AIS &amp; TIS, reconciled.</p>
+        <div className="masthead-left">
+          <div className="brand-row">
+            <div className="brand-icon">Rs</div>
+            <div>
+              <h1 className="wordmark">Tax Calculator</h1>
+              <p className="tagline">Built for salaried employees - payslips, Form 16, AIS &amp; TIS, reconciled.</p>
+            </div>
+          </div>
+        </div>
+        <span className="eyebrow-pill">Old &amp; New Regime - Not Financial Advice</span>
       </header>
 
       <div className="two-col-layout">
-        {/* ---------------- LEFT COLUMN: ALL INPUTS ---------------- */}
+        {/* ================= LEFT COLUMN: INPUTS ================= */}
         <div className="left-col">
-          <fieldset className="entry-group upload-group">
-            <legend>Step 1 - Payslips</legend>
-            <p className="upload-note">Upload all your monthly payslips. Their gross earnings will be summed.</p>
-            <input
-              type="file"
-              accept="application/pdf"
-              multiple
-              onChange={(e) => setPayslipFiles(Array.from(e.target.files))}
-            />
-            {payslipFiles.length > 0 && <small className="upload-status">{payslipFiles.length} file(s) selected</small>}
-          </fieldset>
+          <div className="card">
+            <div className="card-header">
+              <div className="card-icon">1</div>
+              <span className="card-title">Payslips</span>
+            </div>
+            <p className="card-note">Upload all your monthly payslips - their gross earnings will be summed.</p>
+            <div className="upload-dropzone">
+              <input
+                type="file"
+                accept="application/pdf"
+                multiple
+                onChange={(e) => setPayslipFiles(Array.from(e.target.files))}
+              />
+              {payslipFiles.length > 0 && (
+                <div className="upload-status-chip">{payslipFiles.length} file(s) selected</div>
+              )}
+            </div>
+          </div>
 
-          <fieldset className="entry-group upload-group">
-            <legend>Step 2 - Form 16</legend>
-            <p className="upload-note">
-              Authoritative for gross salary and salary TDS. Any gap vs. your payslips (e.g. perquisites) is
-              automatically identified and added.
+          <div className="card">
+            <div className="card-header">
+              <div className="card-icon">2</div>
+              <span className="card-title">Form 16</span>
+            </div>
+            <p className="card-note">
+              Authoritative for gross salary and salary TDS. Any gap vs. your payslips (perquisites, bonuses)
+              is automatically identified and added.
             </p>
-            <input type="file" accept="application/pdf" onChange={(e) => setForm16File(e.target.files[0] || null)} />
-            {form16File && <small className="upload-status">{form16File.name}</small>}
-          </fieldset>
+            <div className="upload-dropzone">
+              <input type="file" accept="application/pdf" onChange={(e) => setForm16File(e.target.files[0] || null)} />
+              {form16File && <div className="upload-status-chip">{form16File.name}</div>}
+            </div>
+          </div>
 
-          <fieldset className="entry-group upload-group">
-            <legend>Step 3 - AIS &amp; TIS</legend>
-            <p className="upload-note">
-              Every income category is categorized per the Income Tax Act - some AIS/TIS entries (like fund
-              purchases or foreign remittances) aren't actually taxable income and are excluded automatically.
+          <div className="card">
+            <div className="card-header">
+              <div className="card-icon">3</div>
+              <span className="card-title">AIS &amp; TIS</span>
+            </div>
+            <p className="card-note">
+              Every income category is categorized per the Income Tax Act - fund purchases and foreign
+              remittances aren't taxable income and are excluded automatically.
             </p>
-            <div className="upload-grid">
-              <div className="upload-slot">
-                <label className="upload-label"><span>AIS</span></label>
-                <input type="file" accept="application/pdf" onChange={(e) => setAisFile(e.target.files[0] || null)} />
-                {aisFile && <small className="upload-status">{aisFile.name}</small>}
+            <div className="upload-grid-2">
+              <div>
+                <span className="upload-slot-label">AIS</span>
+                <div className="upload-dropzone">
+                  <input type="file" accept="application/pdf" onChange={(e) => setAisFile(e.target.files[0] || null)} />
+                  {aisFile && <div className="upload-status-chip">{aisFile.name}</div>}
+                </div>
               </div>
-              <div className="upload-slot">
-                <label className="upload-label"><span>TIS</span></label>
-                <input type="file" accept="application/pdf" onChange={(e) => setTisFile(e.target.files[0] || null)} />
-                {tisFile && <small className="upload-status">{tisFile.name}</small>}
+              <div>
+                <span className="upload-slot-label">TIS</span>
+                <div className="upload-dropzone">
+                  <input type="file" accept="application/pdf" onChange={(e) => setTisFile(e.target.files[0] || null)} />
+                  {tisFile && <div className="upload-status-chip">{tisFile.name}</div>}
+                </div>
               </div>
             </div>
-          </fieldset>
-
-          <div className="fy-toggle">
-            <label>
-              <input type="radio" name="fy" checked={fy === "FY 2025-26"} onChange={() => setFy("FY 2025-26")} />
-              <span>FY 2025-26 (AY 2026-27)</span>
-            </label>
-            <label>
-              <input type="radio" name="fy" checked={fy === "FY 2024-25"} onChange={() => setFy("FY 2024-25")} />
-              <span>FY 2024-25 (AY 2025-26)</span>
-            </label>
           </div>
 
-          <div className="age-select">
-            <label htmlFor="age-group">Age category (affects Old Regime exemption limit)</label>
-            <select id="age-group" value={ageGroup} onChange={(e) => setAgeGroup(e.target.value)}>
-              <option value="Below 60">Below 60</option>
-              <option value="60 to 79">60 to 79 (Senior citizen)</option>
-              <option value="80 and above">80 and above (Super senior citizen)</option>
-            </select>
+          <div className="card">
+            <div className="card-header">
+              <div className="card-icon">FY</div>
+              <span className="card-title">Year &amp; Category</span>
+            </div>
+            <div className="field-group">
+              <label>Financial Year</label>
+              <div className="fy-toggle">
+                <label>
+                  <input type="radio" name="fy" checked={fy === "FY 2025-26"} onChange={() => setFy("FY 2025-26")} />
+                  <span>FY 2025-26</span>
+                </label>
+                <label>
+                  <input type="radio" name="fy" checked={fy === "FY 2024-25"} onChange={() => setFy("FY 2024-25")} />
+                  <span>FY 2024-25</span>
+                </label>
+              </div>
+            </div>
+            <div className="field-group">
+              <label htmlFor="age-group">Age category (affects Old Regime exemption)</label>
+              <select id="age-group" className="field-select" value={ageGroup} onChange={(e) => setAgeGroup(e.target.value)}>
+                <option value="Below 60">Below 60</option>
+                <option value="60 to 79">60 to 79 (Senior citizen)</option>
+                <option value="80 and above">80 and above (Super senior citizen)</option>
+              </select>
+            </div>
           </div>
 
-          <fieldset className="entry-group">
-            <legend>NPS &amp; Advance Tax</legend>
+          <div className="card">
+            <div className="card-header">
+              <div className="card-icon">NPS</div>
+              <span className="card-title">NPS &amp; Advance Tax</span>
+            </div>
             <div className="entry-row">
               <div className="entry-label"><span>Employer NPS - 80CCD(2)</span><small>Allowed in both regimes</small></div>
               <div className="entry-input">
-                <span className="rupee">Rs. </span>
+                <span className="rupee">Rs.</span>
                 <input type="number" placeholder="0" value={details.nps_employer} onChange={(e) => handleDetailChange("nps_employer", e.target.value)} />
               </div>
             </div>
             <div className="entry-row">
               <div className="entry-label"><span>Advance tax already paid</span><small>If any</small></div>
               <div className="entry-input">
-                <span className="rupee">Rs. </span>
+                <span className="rupee">Rs.</span>
                 <input type="number" placeholder="0" value={details.advance_tax} onChange={(e) => handleDetailChange("advance_tax", e.target.value)} />
               </div>
             </div>
-          </fieldset>
+          </div>
 
-          <fieldset className="entry-group">
-            <legend>Exemptions</legend>
-            <p className="group-subtitle">Only reduce tax under the Old Regime</p>
+          <div className="card">
+            <div className="card-header">
+              <div className="card-icon">EXM</div>
+              <span className="card-title">Exemptions</span>
+            </div>
+            <p className="section-hint">Only reduce tax under the Old Regime</p>
             {[
               ["hra_exemption", "HRA exemption claimed"],
               ["lta_exemption", "LTA exemption claimed"],
@@ -253,16 +294,19 @@ export default function App() {
               <div className="entry-row" key={key}>
                 <div className="entry-label"><span>{label}</span></div>
                 <div className="entry-input">
-                  <span className="rupee">Rs. </span>
+                  <span className="rupee">Rs.</span>
                   <input type="number" placeholder="0" value={details[key]} onChange={(e) => handleDetailChange(key, e.target.value)} />
                 </div>
               </div>
             ))}
-          </fieldset>
+          </div>
 
-          <fieldset className="entry-group">
-            <legend>Chapter VI-A deductions</legend>
-            <p className="group-subtitle">Only reduce tax under the Old Regime</p>
+          <div className="card">
+            <div className="card-header">
+              <div className="card-icon">80C</div>
+              <span className="card-title">Chapter VI-A Deductions</span>
+            </div>
+            <p className="section-hint">Only reduce tax under the Old Regime</p>
             {[
               ["ded_80c", "80C (PF, ELSS, LIC...)"],
               ["ded_80ccd1b", "80CCD(1B) - NPS additional"],
@@ -273,12 +317,12 @@ export default function App() {
               <div className="entry-row" key={key}>
                 <div className="entry-label"><span>{label}</span></div>
                 <div className="entry-input">
-                  <span className="rupee">Rs. </span>
+                  <span className="rupee">Rs.</span>
                   <input type="number" placeholder="0" value={details[key]} onChange={(e) => handleDetailChange(key, e.target.value)} />
                 </div>
               </div>
             ))}
-          </fieldset>
+          </div>
 
           <div className="action-row">
             <button className="btn-primary" onClick={handleAnalyze} disabled={loading}>
@@ -287,104 +331,132 @@ export default function App() {
             <button className="btn-ghost" onClick={handleReset}>Reset</button>
           </div>
 
-          {error && <p className="error-note">{error}</p>}
+          {error && <div className="error-banner">{error}</div>}
         </div>
 
-        {/* ---------------- RIGHT COLUMN: LIVE RESULTS ---------------- */}
+        {/* ================= RIGHT COLUMN: RESULTS ================= */}
         <div className="right-col">
           <div className="results-sticky">
-            {!result && (
-              <div className="empty-results">
-                <p className="stub-placeholder">
-                  Upload your documents and fill in the details on the left, then click
-                  <strong> "Analyze &amp; Calculate"</strong> - your full reconciliation and both regimes'
-                  results will appear here.
+            {loading && (
+              <div className="loading-card">
+                <div className="spinner" />
+                <p className="loading-title">Analyzing your documents...</p>
+                <p className="loading-subtext">
+                  This usually takes just a few seconds. If the server has been idle, the very first
+                  request can take up to 30-60 seconds to wake up - subsequent ones will be fast.
                 </p>
               </div>
             )}
 
-            {result && (
+            {!loading && !result && (
+              <div className="empty-card">
+                <div className="empty-icon">$</div>
+                <p className="empty-title">Your results will appear here</p>
+                <p className="empty-subtext">
+                  Upload your documents and fill in the details on the left, then click
+                  {" "}<strong>Analyze &amp; Calculate</strong>.
+                </p>
+              </div>
+            )}
+
+            {!loading && result && (
               <>
                 <div className="date-note">
-                  [Date] Calculated as of {result.calculation_date} - {result.itr_due_date_note}
+                  <span className="date-note-icon">i</span>
+                  <span>Calculated as of {result.calculation_date} - {result.itr_due_date_note}</span>
                 </div>
 
-                <div className={`compare-card ${salaryMatches ? "compare-match" : "compare-mismatch"}`}>
-                  <div className="compare-title">Salary Reconciliation</div>
-                  <div className="compare-row">
+                <div className="card recon-card">
+                  <div className="recon-status-row">
+                    <span className={`status-badge ${salaryMatches ? "match" : "mismatch"}`}>
+                      {salaryMatches ? "Match" : "Gap found"}
+                    </span>
+                    <span className="card-title">Salary Reconciliation</span>
+                  </div>
+                  <div className="recon-row">
                     <span>Payslip total (summed)</span>
                     <span className="figure">{formatINR(result.salary.payslip_total)}</span>
                   </div>
-                  <div className="compare-row">
+                  <div className="recon-row">
                     <span>Form 16 gross salary</span>
                     <span className="figure">{formatINR(result.salary.form16_total)}</span>
                   </div>
-                  <div className="compare-row compare-diff">
+                  <div className="recon-row highlight">
                     <span>Additional income identified &amp; added</span>
                     <span className="figure">{formatINR(result.salary.additional_income_identified)}</span>
                   </div>
-                  <div className="compare-row analysis-subtotal">
+                  <div className="recon-row total">
                     <span>Final gross salary used</span>
                     <span className="figure">{formatINR(result.salary.final_gross_salary)}</span>
                   </div>
                 </div>
 
-                <div className="compare-card compare-match">
-                  <div className="compare-title">TDS Reconciliation</div>
-                  <div className="compare-row">
+                <div className="card recon-card">
+                  <div className="recon-status-row">
+                    <span className="status-badge match">TDS</span>
+                    <span className="card-title">TDS Reconciliation</span>
+                  </div>
+                  <div className="recon-row">
                     <span>Payslip TDS total (summed)</span>
                     <span className="figure">{formatINR(result.tds.payslip_tds_total)}</span>
                   </div>
-                  <div className="compare-row">
+                  <div className="recon-row">
                     <span>Form 16 / AIS salary TDS</span>
                     <span className="figure">{formatINR(result.tds.form16_tds)}</span>
                   </div>
-                  <div className="compare-row analysis-subtotal">
+                  <div className="recon-row total">
                     <span>Salary TDS used</span>
                     <span className="figure">{formatINR(result.tds.salary_tds_used)}</span>
                   </div>
-                  <div className="compare-row">
-                    <span>+ TDS on other income (from AIS)</span>
+                  <div className="recon-row">
+                    <span>+ TDS on other income (AIS)</span>
                     <span className="figure">{formatINR(result.tds.other_sources_tds)}</span>
                   </div>
-                  <div className="compare-row analysis-subtotal">
+                  <div className="recon-row total">
                     <span>Total TDS paid</span>
                     <span className="figure">{formatINR(result.tds.total_tds)}</span>
                   </div>
                 </div>
 
                 {result.other_income_items.length > 0 && (
-                  <div className="compare-card compare-match">
-                    <div className="compare-title">Other Income - Categorized per Income Tax Act</div>
-                    <table className="income-table">
-                      <tbody>
-                        {result.other_income_items.map((item, i) => {
-                          const t = TREATMENT_LABELS[item.treatment] || TREATMENT_LABELS.needs_review;
-                          return (
-                            <tr key={i}>
-                              <td>{item.category}</td>
-                              <td className="figure">{formatINR(item.amount)}</td>
-                              <td><span className={`income-tag ${t.cls}`}>{t.label}</span></td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    {result.vda_income_total > 0 && <p className="compare-note">{result.vda_caveat}</p>}
+                  <div className="card recon-card">
+                    <div className="card-header">
+                      <span className="card-title">Other Income - Categorized per Income Tax Act</span>
+                    </div>
+                    <div className="income-list">
+                      {result.other_income_items.map((item, i) => {
+                        const t = TREATMENT_LABELS[item.treatment] || TREATMENT_LABELS.needs_review;
+                        return (
+                          <div className="income-item" key={i}>
+                            <div className="income-item-main">
+                              <span className="income-item-name">{item.category}</span>
+                              <span className={`income-tag ${t.cls}`}>{t.label}</span>
+                            </div>
+                            <span className="income-item-amount">{formatINR(item.amount)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {result.vda_income_total > 0 && <p className="caveat-note">{result.vda_caveat}</p>}
                   </div>
                 )}
 
-                <div className="stub-head-row">
-                  <span className="stub-fy-label">{fy}</span>
-                </div>
-                {renderRegimeCard("New Regime", result.new_regime)}
-                {renderRegimeCard("Old Regime", result.old_regime)}
+                {(() => {
+                  const netSigned = (r) => (r.is_refund ? -r.final_amount : r.final_amount);
+                  const newIsBetter = netSigned(result.new_regime) <= netSigned(result.old_regime);
+                  return (
+                    <>
+                      {renderRegimeCard("New Regime", result.new_regime, newIsBetter)}
+                      {renderRegimeCard("Old Regime", result.old_regime, !newIsBetter)}
+                    </>
+                  );
+                })()}
 
-                <p className="disclaimer">
+                <p className="disclaimer-footer">
                   For personal tracking only. Not a substitute for filing your ITR or advice from a CA.
                   234B/234C interest figures are simplified estimates - the actual computation during
-                  assessment may differ based on exact payment timing. Does not account for capital gains
-                  (flagged separately if detected), house property income, or surcharge on very high incomes.
+                  assessment may differ. Does not account for capital gains, house property income, or
+                  surcharge on very high incomes.
                 </p>
               </>
             )}

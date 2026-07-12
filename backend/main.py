@@ -1,5 +1,6 @@
 import io
 import re
+import asyncio
 from datetime import datetime, date
 
 import pdfplumber
@@ -333,6 +334,13 @@ def extract_pdf_text(file_bytes: bytes) -> str:
     return text
 
 
+async def extract_pdf_text_async(file_bytes: bytes) -> str:
+    """Run the CPU-bound pdfplumber parsing in a thread pool so multiple
+    documents can be processed concurrently instead of one after another."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, extract_pdf_text, file_bytes)
+
+
 @app.post("/extract", response_model=ExtractedFields)
 async def extract_document(file: UploadFile = File(...), doc_type: str = Form(...)):
     """
@@ -570,13 +578,39 @@ async def full_analysis(
     ais: UploadFile | None = File(default=None),
     tis: UploadFile | None = File(default=None),
 ):
+    # --- Read and extract ALL documents concurrently (instead of one after
+    # another) — this is the main lever we control for speed, since the PDF
+    # parsing itself is CPU-bound but independent per document. ---
+    payslip_bytes = [await f.read() for f in payslips]
+    form16_bytes = await form16.read() if form16 else None
+    ais_bytes = await ais.read() if ais else None
+    tis_bytes = await tis.read() if tis else None
+
+    extraction_tasks = [extract_pdf_text_async(b) for b in payslip_bytes]
+    if form16_bytes is not None:
+        extraction_tasks.append(extract_pdf_text_async(form16_bytes))
+    if ais_bytes is not None:
+        extraction_tasks.append(extract_pdf_text_async(ais_bytes))
+    if tis_bytes is not None:
+        extraction_tasks.append(extract_pdf_text_async(tis_bytes))
+
+    extracted_texts = await asyncio.gather(*extraction_tasks) if extraction_tasks else []
+
+    idx = 0
+    payslip_texts = extracted_texts[idx: idx + len(payslip_bytes)]
+    idx += len(payslip_bytes)
+    form16_text = extracted_texts[idx] if form16_bytes is not None else None
+    idx += 1 if form16_bytes is not None else 0
+    ais_text = extracted_texts[idx] if ais_bytes is not None else ""
+    idx += 1 if ais_bytes is not None else 0
+    tis_text = extracted_texts[idx] if tis_bytes is not None else None
+
     # --- Salary reconciliation: payslips vs Form 16 ---
     payslip_total = None
     payslip_tds_total = None
-    if payslips:
+    if payslip_texts:
         total_gross, total_tds, found = 0.0, 0.0, False
-        for f in payslips:
-            text = extract_pdf_text(await f.read())
+        for text in payslip_texts:
             g = find_amount(text, GROSS_SALARY_PATTERNS)
             t = find_amount(text, TDS_PATTERNS)
             if g:
@@ -588,9 +622,8 @@ async def full_analysis(
         payslip_tds_total = round(total_tds) if total_tds else None
 
     form16_gross, form16_tds = None, None
-    if form16:
-        text = extract_pdf_text(await form16.read())
-        form16_gross, form16_tds = extract_form16_figures(text)
+    if form16_text is not None:
+        form16_gross, form16_tds = extract_form16_figures(form16_text)
         form16_gross = round(form16_gross) if form16_gross else None
         form16_tds = round(form16_tds) if form16_tds else None
 
@@ -616,9 +649,7 @@ async def full_analysis(
 
     # --- AIS: split salary TDS vs other-sources TDS ---
     ais_salary_tds, ais_other_tds = None, None
-    ais_text = ""
-    if ais:
-        ais_text = extract_pdf_text(await ais.read())
+    if ais_text:
         ais_salary_tds, ais_other_tds = split_ais_salary_vs_other_tds(ais_text)
 
     salary_tds_used = form16_tds or ais_salary_tds or payslip_tds_total or 0
@@ -638,8 +669,7 @@ async def full_analysis(
     vda_income_total = 0.0
     non_income_total = 0.0
 
-    if tis:
-        tis_text = extract_pdf_text(await tis.read())
+    if tis_text:
         for row in extract_tis_all_categories(tis_text):
             if row["category"].lower() == "salary" or row["amount"] is None:
                 continue
