@@ -464,37 +464,41 @@ def months_elapsed_since_fy_start(fy_string: str, today=None) -> int:
     return max(0, months)
 
 
-def compute_234b(assessed_tax: float, tax_already_paid: float, fy_string: str):
-    """Simplified estimate: 1% per month on the shortfall, from 1 April of
-    the assessment year to today — 'today' being whenever this app is being
-    used, so the estimate naturally grows the later in the year you check it,
-    and shows 0 if you're not actually short. If advance tax + TDS covers at
-    least 90% of the assessed tax, or the shortfall is ≤ ₹10,000, no interest
-    applies (per the Section 234B rule itself)."""
+def compute_234b(total_tax: float, total_tds: float, advance_tax_paid: float, fy_string: str):
+    """Section 234B: the 'assessed tax' this section actually tests against is
+    total tax MINUS TDS already credited — not the gross tax figure. Advance
+    tax paid separately (not TDS) is then checked against 90% of that net
+    figure. If assessed tax (after TDS) is ≤ ₹10,000, there's no advance-tax
+    obligation at all (Section 208), so no interest applies either."""
+    assessed_tax = total_tax - total_tds
     months = months_elapsed_since_fy_start(fy_string)
-    if assessed_tax - tax_already_paid <= 10000:
+    if assessed_tax <= 10000:
         return 0, months
-    if tax_already_paid >= 0.9 * assessed_tax:
+    if advance_tax_paid >= 0.9 * assessed_tax:
         return 0, months
-    shortfall = assessed_tax - tax_already_paid
+    shortfall = assessed_tax - advance_tax_paid
     return round(shortfall * 0.01 * months), months
 
 
-def compute_234c(assessed_tax: float, total_tds: float):
-    """Simplified estimate against the four advance-tax installment
-    checkpoints (15%/45%/75%/100% by 15 Jun/Sep/Dec/Mar). TDS is treated as
-    paid evenly across the year, which is the standard legal assumption —
-    separately-paid advance tax beyond TDS isn't modeled here, since most
-    salaried taxpayers rely on TDS alone. This is an approximation; the
-    actual computation by the IT Department during processing may differ."""
-    checkpoints = [(0.15, 3, 3 / 12), (0.45, 3, 6 / 12), (0.75, 3, 9 / 12), (1.00, 1, 12 / 12)]
-    total_interest = 0.0
-    for required_pct, months, tds_deemed_fraction in checkpoints:
+def compute_234c(total_tax: float, total_tds: float, advance_tax_paid: float = 0):
+    """Section 234C: checked against the same net-of-TDS 'assessed tax' base
+    as 234B. Advance tax paid separately (not TDS, which is already netted
+    out of the base) is compared against each installment checkpoint
+    (15%/45%/75%/100% by 15 Jun/Sep/Dec/Mar). Each checkpoint's interest is
+    rounded individually before summing, matching how this is computed in
+    practice. Same Section 208 threshold as 234B applies: if the net-of-TDS
+    liability is ≤ ₹10,000, there's no advance-tax obligation at all, so no
+    234C interest either."""
+    assessed_tax = total_tax - total_tds
+    if assessed_tax <= 10000:
+        return 0
+    checkpoints = [(0.15, 3), (0.45, 3), (0.75, 3), (1.00, 1)]
+    total_interest = 0
+    for required_pct, months in checkpoints:
         required = assessed_tax * required_pct
-        deemed_paid = total_tds * tds_deemed_fraction
-        shortfall = max(0, required - deemed_paid)
-        total_interest += shortfall * 0.01 * months
-    return round(total_interest)
+        shortfall = max(0, required - advance_tax_paid)
+        total_interest += round(shortfall * 0.01 * months)
+    return total_interest
 
 
 class IncomeItem(BaseModel):
@@ -674,8 +678,8 @@ async def full_analysis(
         net_before_interest = total_tax - total_tds - advance_tax
 
         if net_before_interest > 0:
-            interest_b, months_b = compute_234b(total_tax, total_tds + advance_tax, fy)
-            interest_c = compute_234c(total_tax, total_tds)
+            interest_b, months_b = compute_234b(total_tax, total_tds, advance_tax, fy)
+            interest_c = compute_234c(total_tax, total_tds, advance_tax)
         else:
             interest_b, months_b = 0, months_elapsed_since_fy_start(fy)
             interest_c = 0

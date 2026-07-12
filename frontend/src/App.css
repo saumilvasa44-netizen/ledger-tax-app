@@ -36,6 +36,7 @@ body {
 .page {
   min-height: 100vh;
   padding: 48px 40px 80px;
+  overflow-x: hidden;
 }
 
 .masthead {
@@ -75,17 +76,19 @@ body {
   max-width: 1600px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 1fr 1.15fr;
+  grid-template-columns: minmax(380px, 460px) 1fr;
   gap: 48px;
   align-items: start;
 }
 
 .left-col {
   min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .right-col {
   min-width: 0;
+  overflow-x: hidden;
 }
 
 .results-sticky {
@@ -93,7 +96,11 @@ body {
   top: 32px;
   max-height: calc(100vh - 64px);
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .empty-results {
@@ -183,7 +190,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   padding: 12px 0;
   border-top: 1px solid var(--border);
 }
@@ -547,7 +555,6 @@ body {
 .compare-card {
   border-radius: 12px;
   padding: 18px 20px;
-  margin-bottom: 20px;
   font-family: var(--font-mono);
   border: 1px solid var(--border);
 }
@@ -600,7 +607,6 @@ body {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px 22px;
-  margin-bottom: 20px;
   font-family: var(--font-mono);
 }
 
@@ -643,6 +649,7 @@ body {
 
 .income-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-family: var(--font-mono);
   font-size: 0.82rem;
@@ -653,11 +660,21 @@ body {
   padding: 8px 6px;
   border-top: 1px solid var(--border);
   color: var(--ink-muted);
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .income-table td:first-child {
   color: var(--ink);
-  max-width: 220px;
+  width: 46%;
+}
+
+.income-table td:nth-child(2) {
+  width: 24%;
+}
+
+.income-table td:last-child {
+  width: 30%;
 }
 
 .income-tag {
@@ -682,7 +699,6 @@ body {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px 18px;
-  margin-bottom: 20px;
   color: var(--ink-muted);
   line-height: 1.5;
 }
