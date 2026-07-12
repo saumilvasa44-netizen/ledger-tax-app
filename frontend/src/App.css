@@ -131,16 +131,9 @@ body {
 
 .right-col {
   min-width: 0;
-  overflow-x: hidden;
 }
 
 .results-sticky {
-  position: sticky;
-  top: 24px;
-  max-height: calc(100vh - 48px);
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 4px 8px 4px 4px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -149,10 +142,6 @@ body {
 @media (max-width: 1080px) {
   .two-col-layout {
     grid-template-columns: 1fr;
-  }
-  .results-sticky {
-    position: static;
-    max-height: none;
   }
 }
 
@@ -580,6 +569,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   font-size: 0.86rem;
   color: var(--ink-muted);
   padding: 7px 0;
@@ -678,7 +669,6 @@ body {
 
 .regime-card {
   border-radius: 18px;
-  overflow: hidden;
 }
 
 .regime-card.best {
@@ -715,6 +705,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   font-size: 0.87rem;
   color: var(--ink-muted);
   padding: 8px 0;
