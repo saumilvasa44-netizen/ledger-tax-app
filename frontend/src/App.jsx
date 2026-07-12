@@ -21,7 +21,6 @@ function formatINR(value) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("documents");
   const [fy, setFy] = useState("FY 2025-26");
   const [ageGroup, setAgeGroup] = useState("Below 60");
 
@@ -63,7 +62,6 @@ export default function App() {
       if (!res.ok) throw new Error("Analysis failed — check the API is running.");
       const data = await res.json();
       setResult(data);
-      setActiveTab("results");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -161,20 +159,9 @@ export default function App() {
         <p className="tagline">Built for salaried employees — payslips, Form 16, AIS &amp; TIS, reconciled.</p>
       </header>
 
-      <nav className="tab-nav">
-        <button className={activeTab === "documents" ? "tab-active" : ""} onClick={() => setActiveTab("documents")}>
-          1 · Documents
-        </button>
-        <button className={activeTab === "details" ? "tab-active" : ""} onClick={() => setActiveTab("details")}>
-          2 · Details
-        </button>
-        <button className={activeTab === "results" ? "tab-active" : ""} onClick={() => setActiveTab("results")}>
-          3 · Results
-        </button>
-      </nav>
-
-      {activeTab === "documents" && (
-        <section className="tab-panel">
+      <div className="two-col-layout">
+        {/* ---------------- LEFT COLUMN: ALL INPUTS ---------------- */}
+        <div className="left-col">
           <fieldset className="entry-group upload-group">
             <legend>Step 1 — Payslips</legend>
             <p className="upload-note">Upload all your monthly payslips. Their gross earnings will be summed.</p>
@@ -217,14 +204,6 @@ export default function App() {
             </div>
           </fieldset>
 
-          <button className="btn-primary" onClick={() => setActiveTab("details")}>
-            Continue to Details →
-          </button>
-        </section>
-      )}
-
-      {activeTab === "details" && (
-        <section className="tab-panel">
           <div className="fy-toggle">
             <label>
               <input type="radio" name="fy" checked={fy === "FY 2025-26"} onChange={() => setFy("FY 2025-26")} />
@@ -309,100 +288,109 @@ export default function App() {
           </div>
 
           {error && <p className="error-note">{error}</p>}
-        </section>
-      )}
+        </div>
 
-      {activeTab === "results" && (
-        <section className="tab-panel tab-panel-wide">
-          {!result && <p className="stub-placeholder">Run the analysis from the Details tab first.</p>}
-
-          {result && (
-            <>
-              <div className="date-note">
-                📅 Calculated as of {result.calculation_date} — {result.itr_due_date_note}
+        {/* ---------------- RIGHT COLUMN: LIVE RESULTS ---------------- */}
+        <div className="right-col">
+          <div className="results-sticky">
+            {!result && (
+              <div className="empty-results">
+                <p className="stub-placeholder">
+                  Upload your documents and fill in the details on the left, then click
+                  <strong> "Analyze &amp; Calculate"</strong> — your full reconciliation and both regimes'
+                  results will appear here.
+                </p>
               </div>
+            )}
 
-              <div className={`compare-card ${salaryMatches ? "compare-match" : "compare-mismatch"}`}>
-                <div className="compare-title">Salary Reconciliation</div>
-                <div className="compare-row">
-                  <span>Payslip total (summed)</span>
-                  <span className="figure">{formatINR(result.salary.payslip_total)}</span>
+            {result && (
+              <>
+                <div className="date-note">
+                  📅 Calculated as of {result.calculation_date} — {result.itr_due_date_note}
                 </div>
-                <div className="compare-row">
-                  <span>Form 16 gross salary</span>
-                  <span className="figure">{formatINR(result.salary.form16_total)}</span>
-                </div>
-                <div className="compare-row compare-diff">
-                  <span>Additional income identified &amp; added</span>
-                  <span className="figure">{formatINR(result.salary.additional_income_identified)}</span>
-                </div>
-                <div className="compare-row analysis-subtotal">
-                  <span>Final gross salary used</span>
-                  <span className="figure">{formatINR(result.salary.final_gross_salary)}</span>
-                </div>
-              </div>
 
-              <div className="compare-card compare-match">
-                <div className="compare-title">TDS Reconciliation</div>
-                <div className="compare-row">
-                  <span>Payslip TDS total (summed)</span>
-                  <span className="figure">{formatINR(result.tds.payslip_tds_total)}</span>
+                <div className={`compare-card ${salaryMatches ? "compare-match" : "compare-mismatch"}`}>
+                  <div className="compare-title">Salary Reconciliation</div>
+                  <div className="compare-row">
+                    <span>Payslip total (summed)</span>
+                    <span className="figure">{formatINR(result.salary.payslip_total)}</span>
+                  </div>
+                  <div className="compare-row">
+                    <span>Form 16 gross salary</span>
+                    <span className="figure">{formatINR(result.salary.form16_total)}</span>
+                  </div>
+                  <div className="compare-row compare-diff">
+                    <span>Additional income identified &amp; added</span>
+                    <span className="figure">{formatINR(result.salary.additional_income_identified)}</span>
+                  </div>
+                  <div className="compare-row analysis-subtotal">
+                    <span>Final gross salary used</span>
+                    <span className="figure">{formatINR(result.salary.final_gross_salary)}</span>
+                  </div>
                 </div>
-                <div className="compare-row">
-                  <span>Form 16 / AIS salary TDS</span>
-                  <span className="figure">{formatINR(result.tds.form16_tds)}</span>
-                </div>
-                <div className="compare-row analysis-subtotal">
-                  <span>Salary TDS used</span>
-                  <span className="figure">{formatINR(result.tds.salary_tds_used)}</span>
-                </div>
-                <div className="compare-row">
-                  <span>+ TDS on other income (from AIS)</span>
-                  <span className="figure">{formatINR(result.tds.other_sources_tds)}</span>
-                </div>
-                <div className="compare-row analysis-subtotal">
-                  <span>Total TDS paid</span>
-                  <span className="figure">{formatINR(result.tds.total_tds)}</span>
-                </div>
-              </div>
 
-              {result.other_income_items.length > 0 && (
                 <div className="compare-card compare-match">
-                  <div className="compare-title">Other Income — Categorized per Income Tax Act</div>
-                  <table className="income-table">
-                    <tbody>
-                      {result.other_income_items.map((item, i) => {
-                        const t = TREATMENT_LABELS[item.treatment] || TREATMENT_LABELS.needs_review;
-                        return (
-                          <tr key={i}>
-                            <td>{item.category}</td>
-                            <td className="figure">{formatINR(item.amount)}</td>
-                            <td><span className={`income-tag ${t.cls}`}>{t.label}</span></td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {result.vda_income_total > 0 && <p className="compare-note">{result.vda_caveat}</p>}
+                  <div className="compare-title">TDS Reconciliation</div>
+                  <div className="compare-row">
+                    <span>Payslip TDS total (summed)</span>
+                    <span className="figure">{formatINR(result.tds.payslip_tds_total)}</span>
+                  </div>
+                  <div className="compare-row">
+                    <span>Form 16 / AIS salary TDS</span>
+                    <span className="figure">{formatINR(result.tds.form16_tds)}</span>
+                  </div>
+                  <div className="compare-row analysis-subtotal">
+                    <span>Salary TDS used</span>
+                    <span className="figure">{formatINR(result.tds.salary_tds_used)}</span>
+                  </div>
+                  <div className="compare-row">
+                    <span>+ TDS on other income (from AIS)</span>
+                    <span className="figure">{formatINR(result.tds.other_sources_tds)}</span>
+                  </div>
+                  <div className="compare-row analysis-subtotal">
+                    <span>Total TDS paid</span>
+                    <span className="figure">{formatINR(result.tds.total_tds)}</span>
+                  </div>
                 </div>
-              )}
 
-              <div className="stub-head-row">
-                <span className="stub-fy-label">{fy}</span>
-              </div>
-              {renderRegimeCard("New Regime", result.new_regime)}
-              {renderRegimeCard("Old Regime", result.old_regime)}
+                {result.other_income_items.length > 0 && (
+                  <div className="compare-card compare-match">
+                    <div className="compare-title">Other Income — Categorized per Income Tax Act</div>
+                    <table className="income-table">
+                      <tbody>
+                        {result.other_income_items.map((item, i) => {
+                          const t = TREATMENT_LABELS[item.treatment] || TREATMENT_LABELS.needs_review;
+                          return (
+                            <tr key={i}>
+                              <td>{item.category}</td>
+                              <td className="figure">{formatINR(item.amount)}</td>
+                              <td><span className={`income-tag ${t.cls}`}>{t.label}</span></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {result.vda_income_total > 0 && <p className="compare-note">{result.vda_caveat}</p>}
+                  </div>
+                )}
 
-              <p className="disclaimer">
-                For personal tracking only. Not a substitute for filing your ITR or advice from a CA.
-                234B/234C interest figures are simplified estimates — the actual computation during
-                assessment may differ based on exact payment timing. Does not account for capital gains
-                (flagged separately if detected), house property income, or surcharge on very high incomes.
-              </p>
-            </>
-          )}
-        </section>
-      )}
+                <div className="stub-head-row">
+                  <span className="stub-fy-label">{fy}</span>
+                </div>
+                {renderRegimeCard("New Regime", result.new_regime)}
+                {renderRegimeCard("Old Regime", result.old_regime)}
+
+                <p className="disclaimer">
+                  For personal tracking only. Not a substitute for filing your ITR or advice from a CA.
+                  234B/234C interest figures are simplified estimates — the actual computation during
+                  assessment may differ based on exact payment timing. Does not account for capital gains
+                  (flagged separately if detected), house property income, or surcharge on very high incomes.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -35,12 +35,12 @@ body {
 
 .page {
   min-height: 100vh;
-  padding: 56px 24px 80px;
+  padding: 48px 40px 80px;
 }
 
 .masthead {
-  max-width: 1040px;
-  margin: 0 auto 48px;
+  max-width: 1600px;
+  margin: 0 auto 40px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -71,18 +71,60 @@ body {
   margin: 0;
 }
 
-.layout {
-  max-width: 1040px;
+.two-col-layout {
+  max-width: 1600px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 1.3fr 1fr;
-  gap: 40px;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 48px;
   align-items: start;
 }
 
-@media (max-width: 860px) {
-  .layout {
+.left-col {
+  min-width: 0;
+}
+
+.right-col {
+  min-width: 0;
+}
+
+.results-sticky {
+  position: sticky;
+  top: 32px;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.empty-results {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  padding: 48px 32px;
+  text-align: center;
+}
+
+.empty-results .stub-placeholder {
+  font-family: var(--font-body);
+  color: var(--ink-muted);
+  font-size: 1rem;
+  line-height: 1.7;
+  max-width: 380px;
+  margin: 0 auto;
+}
+
+.empty-results strong {
+  color: var(--emerald);
+}
+
+@media (max-width: 1080px) {
+  .two-col-layout {
     grid-template-columns: 1fr;
+  }
+  .results-sticky {
+    position: static;
+    max-height: none;
+    margin-top: 32px;
   }
 }
 
@@ -483,41 +525,7 @@ body {
   font-weight: 700;
 }
 
-/* ---------- TABS ---------- */
-
-.tab-nav {
-  max-width: 1040px;
-  margin: 0 auto 28px;
-  display: flex;
-  gap: 4px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 4px;
-}
-
-.tab-nav button {
-  flex: 1;
-  background: transparent;
-  border: none;
-  color: var(--ink-muted);
-  font-family: var(--font-body);
-  font-size: 0.85rem;
-  padding: 11px 12px;
-  border-radius: 7px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.tab-nav button.tab-active {
-  background: var(--emerald-soft);
-  color: var(--ink);
-}
-
-.tab-panel {
-  max-width: 640px;
-  margin: 0 auto;
-}
+/* ---------- (tab nav removed — replaced by persistent two-column layout) ---------- */
 
 .upload-slot-wide {
   border: 1px dashed var(--border);
@@ -586,10 +594,6 @@ body {
 }
 
 /* ---------- FULL ANALYSIS RESULTS ---------- */
-
-.tab-panel-wide {
-  max-width: 720px;
-}
 
 .analysis-card {
   background: var(--surface);
