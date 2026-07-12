@@ -199,6 +199,71 @@ def calculate_tax(data: TaxInput):
 # PDF EXTRACTION
 # ---------------------------------------------------------------------------
 
+def to_float(raw: str):
+    try:
+        return float(raw.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def extract_tis_category(text: str, category_name: str):
+    """TIS has a clean summary table: 'Category Name   <processed>   <accepted>'.
+    The 'accepted by taxpayer' figure (second number) is the authoritative one."""
+    pattern = rf"{re.escape(category_name)}\s+([\d,]+)\s+([\d,]+)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        return to_float(match.group(2))
+    return None
+
+
+def sum_ais_lines_containing(text: str, marker: str):
+    """AIS lists each bank/source as a separate line ending in the amount
+    (e.g. 'SFT-016(SB) Interest income ... BANK NAME (CODE) 1 21,864').
+    Sum the trailing amount across every matching line."""
+    total = 0.0
+    found = False
+    for line in text.splitlines():
+        if marker in line:
+            numbers = re.findall(r"[\d,]+", line)
+            if numbers:
+                amount = to_float(numbers[-1])
+                if amount is not None:
+                    total += amount
+                    found = True
+    return total if found else None
+
+
+def sum_salary_tds_deposited(text: str):
+    """AIS salary section lists one row per quarter/payment:
+    'SR QUARTER DATE AMOUNT_PAID TDS_DEDUCTED TDS_DEPOSITED STATUS'.
+    Sum the TDS_DEPOSITED column across every such row."""
+    total = 0.0
+    found = False
+    for line in text.splitlines():
+        if re.match(r"^\d+\s+Q\d\(", line.strip()):
+            numbers = re.findall(r"[\d,]+", line)
+            if len(numbers) >= 4:
+                tds_deposited = to_float(numbers[-1])
+                if tds_deposited is not None:
+                    total += tds_deposited
+                    found = True
+    return total if found else None
+
+
+def extract_ais_gross_salary(text: str):
+    """AIS Part B7 shows 'GROSS SALARY' as a distinct labeled figure, or the
+    Part B1 salary row 'TDS-192 Salary received ... <count> <amount>'."""
+    match = re.search(r"gross\s*salary\s*(?:received)?\D{0,20}?([\d,]+)", text, re.IGNORECASE)
+    if match:
+        return to_float(match.group(1))
+    for line in text.splitlines():
+        if "TDS-192" in line:
+            numbers = re.findall(r"[\d,]+", line)
+            if numbers:
+                return to_float(numbers[-1])
+    return None
+
+
 GROSS_SALARY_PATTERNS = [
     r"gross\s*salary[^\d]{0,25}([\d,]+\.?\d*)",
     r"total\s*gross\s*(?:earnings|salary)[^\d]{0,25}([\d,]+\.?\d*)",
@@ -212,35 +277,12 @@ TDS_PATTERNS = [
     r"total\s*(?:amount\s*of\s*)?tds[^\d]{0,25}([\d,]+\.?\d*)",
 ]
 
-SB_INTEREST_PATTERNS = [
-    r"interest\s*from\s*savings\s*bank[^\d]{0,40}([\d,]+\.?\d*)",
-    r"savings\s*bank\s*interest[^\d]{0,40}([\d,]+\.?\d*)",
-]
-
-FD_INTEREST_PATTERNS = [
-    r"interest\s*from\s*(?:fixed|term)\s*deposit[^\d]{0,40}([\d,]+\.?\d*)",
-    r"interest\s*from\s*deposit[^\d]{0,40}([\d,]+\.?\d*)",
-]
-
-DIVIDEND_PATTERNS = [
-    r"dividend[^\d]{0,40}([\d,]+\.?\d*)",
-]
-
-TIS_TDS_PATTERNS = [
-    r"tds\s*/?\s*tcs\s*(?:deducted|collected)?[^\d]{0,25}([\d,]+\.?\d*)",
-    r"total\s*tds[^\d]{0,25}([\d,]+\.?\d*)",
-]
-
 
 def find_amount(text: str, patterns: list[str]):
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            raw = match.group(1).replace(",", "")
-            try:
-                return float(raw)
-            except ValueError:
-                continue
+            return to_float(match.group(1))
     return None
 
 
@@ -256,8 +298,11 @@ def extract_pdf_text(file_bytes: bytes) -> str:
 async def extract_document(file: UploadFile = File(...), doc_type: str = Form(...)):
     """
     doc_type: "payslip" | "form16" | "ais" | "tis"
-    Best-effort text-pattern extraction — figures should be verified by the user,
-    since payslip/Form16/AIS/TIS layouts vary a lot between employers and years.
+
+    TIS uses a clean summary table and is the preferred source for interest/
+    dividend income. AIS lists the same figures spread across many repeating
+    per-bank rows, which is summed as a fallback. Always verify extracted
+    figures — layouts can still vary between years/portals.
     """
     file_bytes = await file.read()
     try:
@@ -267,14 +312,25 @@ async def extract_document(file: UploadFile = File(...), doc_type: str = Form(..
 
     result = ExtractedFields(doc_type=doc_type, raw_text_preview=text[:300])
 
-    if doc_type in ("payslip", "form16"):
+    if doc_type == "payslip":
         result.gross_salary = find_amount(text, GROSS_SALARY_PATTERNS)
         result.tds = find_amount(text, TDS_PATTERNS)
-    elif doc_type == "ais":
-        result.sb_interest = find_amount(text, SB_INTEREST_PATTERNS)
-        result.fd_interest = find_amount(text, FD_INTEREST_PATTERNS)
-        result.dividend_income = find_amount(text, DIVIDEND_PATTERNS)
+
+    elif doc_type == "form16":
+        result.gross_salary = find_amount(text, GROSS_SALARY_PATTERNS)
+        result.tds = find_amount(text, TDS_PATTERNS)
+
     elif doc_type == "tis":
-        result.tds = find_amount(text, TIS_TDS_PATTERNS)
+        result.gross_salary = extract_tis_category(text, "Salary")
+        result.sb_interest = extract_tis_category(text, "Interest from savings bank")
+        result.fd_interest = extract_tis_category(text, "Interest from deposit")
+        result.dividend_income = extract_tis_category(text, "Dividend")
+
+    elif doc_type == "ais":
+        result.gross_salary = extract_ais_gross_salary(text)
+        result.tds = sum_salary_tds_deposited(text)
+        result.sb_interest = sum_ais_lines_containing(text, "SFT-016(SB)")
+        result.fd_interest = sum_ais_lines_containing(text, "SFT-016(TD)")
+        result.dividend_income = sum_ais_lines_containing(text, "Dividend")
 
     return result
