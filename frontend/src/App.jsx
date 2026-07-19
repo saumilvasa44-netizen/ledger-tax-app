@@ -31,6 +31,7 @@ const emptyDetails = {
   nps_employer: "", hra_exemption: "", lta_exemption: "", other_exemptions: "",
   ded_80c: "", ded_80ccd1b: "", ded_80d: "", ded_80tta_ttb: "", ded_other: "",
   advance_tax: "", self_assessment_tax_paid: "", additional_vda_income: "",
+  additional_other_income: "",
 };
 
 export default function App() {
@@ -554,17 +555,25 @@ export default function App() {
           <div className="card">
             <div className="card-header">
               <div className="card-icon">VDA</div>
-              <span className="card-title">Capital Gains / Virtual Digital Assets</span>
+              <span className="card-title">Income Adjustments</span>
             </div>
             <p className="card-note">
-              Amount and transfer date are both picked up automatically from your AIS/TIS - no manual entry
-              needed. Only use this field to add income not picked up automatically.
+              Everything below is picked up automatically from your AIS/TIS - no manual entry needed. Only
+              use these fields to top up income that wasn't picked up automatically, or that was flagged
+              for review below (check the "Other Income" card once you run the analysis).
             </p>
             <div className="entry-row">
               <div className="entry-label"><span>Additional VDA / capital gains income</span><small>Added on top of anything found in TIS</small></div>
               <div className="entry-input">
                 <span className="rupee">Rs.</span>
                 <input type="number" placeholder="0" value={details.additional_vda_income} onChange={(e) => handleDetailChange("additional_vda_income", e.target.value)} />
+              </div>
+            </div>
+            <div className="entry-row">
+              <div className="entry-label"><span>Additional other income</span><small>Interest / dividend / etc. not picked up or flagged for review</small></div>
+              <div className="entry-input">
+                <span className="rupee">Rs.</span>
+                <input type="number" placeholder="0" value={details.additional_other_income} onChange={(e) => handleDetailChange("additional_other_income", e.target.value)} />
               </div>
             </div>
           </div>
@@ -753,6 +762,7 @@ export default function App() {
                             <div className="income-item-main">
                               <span className="income-item-name">{item.category}</span>
                               <span className={`income-tag ${t.cls}`}>{t.label}</span>
+                              {item.note && <span className="income-item-note">{item.note}</span>}
                             </div>
                             <span className="income-item-amount">{formatINR(item.amount)}</span>
                           </div>

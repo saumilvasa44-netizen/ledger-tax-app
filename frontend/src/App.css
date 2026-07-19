@@ -632,6 +632,13 @@ body {
   overflow-wrap: break-word;
 }
 
+.income-item-note {
+  font-size: 0.76rem;
+  color: var(--gold);
+  overflow-wrap: break-word;
+  line-height: 1.5;
+}
+
 .income-tag {
   display: inline-flex;
   align-self: flex-start;

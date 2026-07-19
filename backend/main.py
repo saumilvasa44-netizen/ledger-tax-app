@@ -456,6 +456,18 @@ TIS_CATEGORY_RULES = [
     (["sale of securities", "sale of immovable", "capital gain"], "capital_gains_needs_review"),
 ]
 
+# When a TIS category's own aggregate comes back negative (a portal-side
+# correction/reversal netted against real income - not a genuine negative
+# income figure), fall back to summing that category's own tagged entries
+# straight from AIS instead of guessing. Each category maps to the AIS
+# "INFORMATION CODE" that reports it directly (not the TDS-194A channel,
+# which can double-report the same income already counted elsewhere).
+AIS_FALLBACK_MARKER_BY_TIS_CATEGORY = {
+    "interest from savings bank": "SFT-016(SB)",
+    "interest from deposit": "SFT-016(TD)",
+    "dividend": "SFT-015",
+}
+
 
 def categorize_tis_category(name: str) -> str:
     name_lower = name.lower()
@@ -468,9 +480,11 @@ def categorize_tis_category(name: str) -> str:
 def extract_tis_all_categories(text: str):
     """Parse every row of TIS's summary table (restricted to the summary
     section only — the detailed Annexure pages repeat similar-looking rows
-    that would otherwise be mistakenly picked up)."""
+    that would otherwise be mistakenly picked up). Accepts negative totals
+    (a bank-side correction can net a category below zero) so a row is
+    never silently dropped just because its value starts with '-'."""
     summary_section = text.split("Annexure to Taxpayer Information Summary")[0]
-    pattern = r"^(\d+)\s+(.+?)\s+([\d,]+)\s+([\d,]+)$"
+    pattern = r"^(\d+)\s+(.+?)\s+(-?[\d,]+)\s+(-?[\d,]+)$"
     rows = []
     for line in summary_section.splitlines():
         match = re.match(pattern, line.strip())
@@ -743,6 +757,7 @@ class IncomeItem(BaseModel):
     amount: int
     treatment: str  # slab_other_income | vda_flat30 | non_income | capital_gains_needs_review | needs_review
     included_in_tax: bool
+    note: str | None = None
 
 
 class SalaryReconciliation(BaseModel):
@@ -819,6 +834,7 @@ async def run_full_analysis(
     advance_tax: float,
     self_assessment_tax_paid: float,
     additional_vda_income: float,
+    additional_other_income: float,
     payslips: list[UploadFile],
     form16: UploadFile | None,
     ais: UploadFile | None,
@@ -923,21 +939,54 @@ async def run_full_analysis(
             if row["category"].lower() == "salary" or row["amount"] is None:
                 continue
             treatment = categorize_tis_category(row["category"])
+            amount = row["amount"]
+            note = None
+
+            # TIS's own aggregate for a category occasionally comes back
+            # negative - almost always a portal-side correction/reversal
+            # netted against real income, not a genuine negative income
+            # figure. Rather than let that silently reduce taxable income
+            # (or drop the row entirely, which used to happen before the
+            # parser accepted negative numbers), fall back to summing that
+            # category's own entries straight from AIS.
+            if amount < 0 and treatment == "slab_other_income":
+                marker = AIS_FALLBACK_MARKER_BY_TIS_CATEGORY.get(row["category"].strip().lower())
+                fallback = sum_ais_lines_containing(ais_text, marker) if (marker and ais_text) else None
+                if fallback is not None and fallback >= 0:
+                    note = (
+                        f"TIS reported a negative total ({round(amount):,}) for this category - "
+                        f"likely a bank-side correction. Used the sum of positive entries from "
+                        f"your AIS instead ({round(fallback):,})."
+                    )
+                    amount = fallback
+                else:
+                    treatment = "needs_review"
+                    note = (
+                        f"TIS reported a negative total ({round(amount):,}) for this category and "
+                        f"no reliable positive figure could be found in your AIS - excluded from tax "
+                        f"automatically. Verify against your AIS annexure and add the correct amount "
+                        f"manually if needed."
+                    )
+
             included = treatment in ("slab_other_income", "vda_flat30")
             other_income_items.append(IncomeItem(
-                category=row["category"], amount=round(row["amount"]),
-                treatment=treatment, included_in_tax=included,
+                category=row["category"], amount=round(amount),
+                treatment=treatment, included_in_tax=included, note=note,
             ))
             if treatment == "slab_other_income":
-                slab_other_income_total += row["amount"]
+                slab_other_income_total += amount
             elif treatment == "vda_flat30":
-                vda_income_total += row["amount"]
+                vda_income_total += amount
             elif treatment == "non_income":
-                non_income_total += row["amount"]
+                non_income_total += amount
 
     # Manual top-up for VDA / capital gains income not picked up from TIS
     # (e.g. TIS summary table doesn't carry per-transaction dates).
     vda_income_total += additional_vda_income
+    # Manual top-up for other slab-rate income (interest/dividend/etc.) not
+    # correctly captured automatically - e.g. a TIS category that needed
+    # review above, once the user has verified the real figure.
+    slab_other_income_total += additional_other_income
 
     # Fully automatic - no manual date entry: try to pull the VDA transfer
     # date straight out of the uploaded AIS (preferred, has per-transaction
@@ -1317,12 +1366,14 @@ def build_excel_workbook(result: FullAnalysisResult, fy: str, age_group: str) ->
     if result.other_income_items:
         row = _section_header(ws2, row, 3, "Other Income - Categorized per Income Tax Act")
         row = _data_table(
-            ws2, row, ["Category", "Amount", "Treatment"],
-            [(i.category, i.amount, i.treatment.replace("_", " ").title()) for i in result.other_income_items],
+            ws2, row, ["Category", "Amount", "Treatment", "Note"],
+            [(i.category, i.amount, i.treatment.replace("_", " ").title(), i.note or "")
+             for i in result.other_income_items],
         )
     ws2.column_dimensions["A"].width = 42
     ws2.column_dimensions["B"].width = 18
     ws2.column_dimensions["C"].width = 22
+    ws2.column_dimensions["D"].width = 60
     ws2.sheet_view.showGridLines = False
 
     # --- One detailed sheet per regime ---
@@ -1354,6 +1405,7 @@ async def full_analysis(
     advance_tax: float = Form(0.0),
     self_assessment_tax_paid: float = Form(0.0),
     additional_vda_income: float = Form(0.0),
+    additional_other_income: float = Form(0.0),
     payslips: list[UploadFile] = File(default=[]),
     form16: UploadFile | None = File(default=None),
     ais: UploadFile | None = File(default=None),
@@ -1362,7 +1414,7 @@ async def full_analysis(
     return await run_full_analysis(
         fy, age_group, nps_employer, hra_exemption, lta_exemption, other_exemptions,
         ded_80c, ded_80ccd1b, ded_80d, ded_80tta_ttb, ded_other,
-        advance_tax, self_assessment_tax_paid, additional_vda_income,
+        advance_tax, self_assessment_tax_paid, additional_vda_income, additional_other_income,
         payslips, form16, ais, tis,
     )
 
@@ -1383,6 +1435,7 @@ async def export_excel(
     advance_tax: float = Form(0.0),
     self_assessment_tax_paid: float = Form(0.0),
     additional_vda_income: float = Form(0.0),
+    additional_other_income: float = Form(0.0),
     payslips: list[UploadFile] = File(default=[]),
     form16: UploadFile | None = File(default=None),
     ais: UploadFile | None = File(default=None),
@@ -1391,7 +1444,7 @@ async def export_excel(
     result = await run_full_analysis(
         fy, age_group, nps_employer, hra_exemption, lta_exemption, other_exemptions,
         ded_80c, ded_80ccd1b, ded_80d, ded_80tta_ttb, ded_other,
-        advance_tax, self_assessment_tax_paid, additional_vda_income,
+        advance_tax, self_assessment_tax_paid, additional_vda_income, additional_other_income,
         payslips, form16, ais, tis,
     )
     workbook_bytes = build_excel_workbook(result, fy, age_group)
