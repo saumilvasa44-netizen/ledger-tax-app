@@ -565,11 +565,66 @@ def compute_234b_detailed(assessed_tax: float, fy: str, today=None):
     return total_interest, months, breakdown
 
 
+MONTH_NAMES = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _parse_date_token(part1: str, part2: str, part3: str):
+    try:
+        if part2.isalpha():
+            month = MONTH_NAMES.get(part2.lower()[:3])
+            if not month:
+                return None
+            return date(int(part3), month, int(part1))
+        d, m, y = int(part1), int(part2), int(part3)
+        return date(y, m, d)
+    except (ValueError, TypeError):
+        return None
+
+
+def extract_vda_transfer_date(text: str, fy: str):
+    """Best-effort, fully automatic: scans the block of AIS/TIS text around
+    any 'virtual digital asset' mention for a transaction date, and returns
+    the EARLIEST plausible date found within the relevant FY (the earliest
+    transaction is what matters for 234C - if ANY VDA income arose before a
+    checkpoint, that checkpoint must include it). Returns None if nothing
+    confidently found, in which case 234C falls back to the safe full-year
+    simplification rather than guessing."""
+    if not text:
+        return None
+    fy_start, ay_start = fy_ay_start_dates(fy)
+    fy_end = date(ay_start.year, 3, 31)
+
+    lower = text.lower()
+    idx = lower.find("virtual digital asset")
+    if idx == -1:
+        return None
+    window = text[max(0, idx - 200): idx + 1000]
+
+    candidates = []
+    for m in re.finditer(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", window):
+        c = _parse_date_token(m.group(1), m.group(2), m.group(3))
+        if c and fy_start <= c <= fy_end:
+            candidates.append(c)
+    for m in re.finditer(
+        r"(\d{1,2})[-\s](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-\s](\d{4})",
+        window, re.IGNORECASE,
+    ):
+        c = _parse_date_token(m.group(1), m.group(2), m.group(3))
+        if c and fy_start <= c <= fy_end:
+            candidates.append(c)
+    return min(candidates) if candidates else None
+
+
 def compute_234c_detailed(
+    slab_only_tax_with_cess: float,
     full_tax_with_cess: float,
     total_tds: float,
     advance_tax_paid: float,
     fy: str,
+    vda_transfer_date: date | None = None,
     today=None,
 ):
     """Section 234C, computed against four installment checkpoints
@@ -577,21 +632,26 @@ def compute_234c_detailed(
     Rs-100 rounding as 234B is applied to each checkpoint's shortfall before
     the rate is applied.
 
-    No capital-gains transfer date is required from the user: any checkpoint
-    whose due date hasn't occurred yet as of today is simply skipped (there's
-    no advance-tax shortfall for an installment that hasn't come due), and
-    every checkpoint that HAS occurred uses the full assessed tax (including
-    VDA/capital gains) — the same simplified convention professional ITR
-    software itself offers as a toggle ("calculate from start of year" rather
-    than "from date of sale"). This keeps everything document-driven with no
-    manual date entry, at the cost of a small, always-conservative (never an
-    underestimate) overstatement of 234C in the rare case a large capital
-    gain arose late in the year."""
+    Two automatic (no manual input) refinements are layered on top of the
+    plain calculation:
+    1. Any checkpoint whose due date hasn't occurred yet as of today is
+       skipped entirely - there's no advance-tax shortfall for an
+       installment that hasn't come due yet (this is what makes 234B/234C
+       "calculate only up to whichever month you're checking in").
+    2. If `vda_transfer_date` was auto-extracted from the uploaded AIS/TIS
+       (see extract_vda_transfer_date), any checkpoint due BEFORE that date
+       excludes the VDA/capital-gains tax component - you can't owe advance
+       tax on a gain that hadn't happened yet. When no date could be found,
+       every checkpoint uses the full assessed tax (the same simplified
+       "from start of year" mode professional ITR software itself offers as
+       a toggle) - a small, always-conservative overstatement rather than a
+       guess."""
     today = today or datetime.now().date()
     full_assessed = full_tax_with_cess - total_tds
     if full_assessed <= SECTION_208_THRESHOLD:
         return 0, []
 
+    slab_only_assessed = slab_only_tax_with_cess - total_tds
     fy_start_year = 2025 if "2025-26" in fy else 2024
     checkpoints = [
         (0.15, 3, "First (Up to 15 Jun)", date(fy_start_year, 6, 15)),
@@ -606,7 +666,11 @@ def compute_234c_detailed(
         if due_date > today:
             continue  # installment hasn't come due yet - no shortfall possible
 
-        assessed_for_checkpoint = max(0.0, full_assessed)
+        if vda_transfer_date is not None and vda_transfer_date > due_date:
+            assessed_for_checkpoint = max(0.0, slab_only_assessed)
+        else:
+            assessed_for_checkpoint = max(0.0, full_assessed)
+
         required = round_half_up(assessed_for_checkpoint * pct)
         shortfall = max(0, required - advance_tax_paid)
         shortfall_rounded = floor_100(shortfall)
@@ -847,6 +911,15 @@ async def run_full_analysis(
     # (e.g. TIS summary table doesn't carry per-transaction dates).
     vda_income_total += additional_vda_income
 
+    # Fully automatic - no manual date entry: try to pull the VDA transfer
+    # date straight out of the uploaded AIS (preferred, has per-transaction
+    # detail) or TIS text. If nothing is confidently found, 234C falls back
+    # to the safe full-year simplification further down.
+    auto_vda_transfer_date = (
+        extract_vda_transfer_date(ais_text, fy)
+        or extract_vda_transfer_date(tis_text or "", fy)
+    )
+
     # --- Tax calculation, both regimes ---
     def calc_regime(is_new_regime: bool) -> RegimeFullResult:
         if is_new_regime:
@@ -897,7 +970,8 @@ async def run_full_analysis(
         if assessed_tax > 0:
             interest_b, months_b, breakdown_b = compute_234b_detailed(assessed_tax, fy)
             interest_c, breakdown_c = compute_234c_detailed(
-                total_tax_with_cess, total_tds, advance_tax, fy,
+                slab_tax_with_cess, total_tax_with_cess, total_tds, advance_tax, fy,
+                vda_transfer_date=auto_vda_transfer_date,
             )
         else:
             interest_b, months_b, breakdown_b = 0, months_elapsed_since_fy_start(fy), []

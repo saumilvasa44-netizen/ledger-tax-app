@@ -557,8 +557,8 @@ export default function App() {
               <span className="card-title">Capital Gains / Virtual Digital Assets</span>
             </div>
             <p className="card-note">
-              Auto-detected from your TIS - no need to enter a transfer date. Only use this field to add
-              income not picked up automatically.
+              Amount and transfer date are both picked up automatically from your AIS/TIS - no manual entry
+              needed. Only use this field to add income not picked up automatically.
             </p>
             <div className="entry-row">
               <div className="entry-label"><span>Additional VDA / capital gains income</span><small>Added on top of anything found in TIS</small></div>
@@ -792,10 +792,11 @@ export default function App() {
                 <p className="disclaimer-footer">
                   For personal tracking only. Not a substitute for filing your ITR or advice from a CA.
                   234B/234C figures follow Section 288A/288B rounding and the floor-to-nearest-Rs-100
-                  convention used by ITR computation software. 234C is calculated using the full assessed
-                  tax for every installment that has already come due, without needing a capital-gains
-                  transfer date - a small, always-conservative simplification. Does not account for house
-                  property income or surcharge on very high incomes.
+                  convention used by ITR computation software, and only count installments that have
+                  already come due as of today. If your AIS mentions a VDA/capital-gains transfer date,
+                  it's picked up automatically to exclude pre-transfer installments; otherwise 234C uses
+                  the full assessed tax for every due installment (a small, always-conservative fallback).
+                  Does not account for house property income or surcharge on very high incomes.
                 </p>
               </>
             )}
