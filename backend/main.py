@@ -1,12 +1,17 @@
 import io
 import re
+import math
 import asyncio
 from datetime import datetime, date
 
 import pdfplumber
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 app = FastAPI(title="ITR Tax Tracker API")
 
@@ -82,73 +87,117 @@ class ExtractedFields(BaseModel):
 
 STANDARD_DEDUCTION_NEW = 75000
 STANDARD_DEDUCTION_OLD = 50000
+SECTION_208_THRESHOLD = 10000  # no advance-tax obligation (hence no 234B/234C) below this
 
 
-def compute_new_regime_tax(taxable_income: float, fy: str) -> float:
+def round_10(value: float) -> int:
+    """Section 288A / 288B style rounding: round to the nearest multiple of
+    ten rupees, with the .5 case always rounding away from zero (never
+    banker's rounding) - matches how ITR computation software rounds."""
+    sign = -1 if value < 0 else 1
+    v = abs(value)
+    return int(sign * (math.floor(v / 10 + 0.5) * 10))
+
+
+def round_half_up(value: float) -> int:
+    sign = -1 if value < 0 else 1
+    v = abs(value)
+    return int(sign * math.floor(v + 0.5))
+
+
+def floor_100(value: float) -> int:
+    """The 'Remaining Tax Due (Round off in 100 Rs.)' step used before
+    applying the 234B/234C monthly rate - always rounds DOWN to the nearest
+    hundred, never to the nearest hundred."""
+    if value <= 0:
+        return 0
+    return int(math.floor(value / 100) * 100)
+
+
+def new_regime_brackets(fy: str):
     if "2025-26" in fy:
-        slabs = [
-            (400000, 0.00), (400000, 0.05), (400000, 0.10),
-            (400000, 0.15), (400000, 0.20), (400000, 0.25),
-            (float("inf"), 0.30),
-        ]
-        rebate_limit = 1200000
-    else:
-        slabs = [
-            (300000, 0.00), (300000, 0.05), (300000, 0.10),
-            (300000, 0.15), (300000, 0.20), (float("inf"), 0.30),
-        ]
-        rebate_limit = 700000
-
-    tax = 0.0
-    remaining = taxable_income
-    for width, rate in slabs:
-        chunk = min(remaining, width)
-        if chunk <= 0:
-            break
-        tax += chunk * rate
-        remaining -= chunk
-
-    if taxable_income <= rebate_limit:
-        tax = 0.0
-    return tax
+        return (
+            [
+                (0, 400000, 0.00), (400000, 800000, 0.05), (800000, 1200000, 0.10),
+                (1200000, 1600000, 0.15), (1600000, 2000000, 0.20), (2000000, 2400000, 0.25),
+                (2400000, None, 0.30),
+            ],
+            1200000,
+        )
+    return (
+        [
+            (0, 300000, 0.00), (300000, 600000, 0.05), (600000, 900000, 0.10),
+            (900000, 1200000, 0.15), (1200000, 1500000, 0.20), (1500000, None, 0.30),
+        ],
+        700000,
+    )
 
 
-def compute_old_regime_tax(taxable_income: float, age_group: str) -> float:
+def old_regime_brackets(age_group: str):
     if age_group == "60 to 79":
         exempt_limit = 300000
     elif age_group == "80 and above":
         exempt_limit = 500000
     else:
         exempt_limit = 250000
+    return [
+        (0, exempt_limit, 0.00),
+        (exempt_limit, 500000, 0.05),
+        (500000, 1000000, 0.20),
+        (1000000, None, 0.30),
+    ], exempt_limit
 
-    slabs = [
-        (exempt_limit, 0.00),
-        (max(0, 500000 - exempt_limit), 0.05),
-        (max(0, 1000000 - 500000), 0.20),
-        (float("inf"), 0.30),
-    ]
 
+def compute_slab_tax(taxable_income: float, brackets: list):
+    """Walks each slab bracket and returns (tax, breakdown) where breakdown
+    is a list of line items suitable for a 'Tax calculation on Normal
+    income' style display, mirroring how ITR computation software shows it."""
     tax = 0.0
-    remaining = taxable_income
-    for width, rate in slabs:
-        chunk = min(remaining, width)
-        if chunk <= 0:
+    breakdown = []
+    for lo, hi, rate in brackets:
+        if taxable_income <= lo:
+            break
+        upper = hi if hi is not None else taxable_income
+        amount_in_band = min(taxable_income, upper) - lo
+        if amount_in_band <= 0:
             continue
-        tax += chunk * rate
-        remaining -= chunk
+        band_tax = amount_in_band * rate
+        tax += band_tax
+        breakdown.append({
+            "from": round(lo),
+            "to": round(min(taxable_income, upper)),
+            "rate_pct": round(rate * 100, 2),
+            "taxable_amount": round(amount_in_band),
+            "tax": round(band_tax),
+        })
+    return tax, breakdown
 
+
+def compute_new_regime_tax(taxable_income: float, fy: str):
+    brackets, rebate_limit = new_regime_brackets(fy)
+    tax, breakdown = compute_slab_tax(taxable_income, brackets)
+    if taxable_income <= rebate_limit:
+        tax = 0.0
+        breakdown = []
+    return tax, breakdown
+
+
+def compute_old_regime_tax(taxable_income: float, age_group: str):
+    brackets, _ = old_regime_brackets(age_group)
+    tax, breakdown = compute_slab_tax(taxable_income, brackets)
     if taxable_income <= 500000:
         tax = 0.0
-    return tax
+        breakdown = []
+    return tax, breakdown
 
 
 def build_regime_result(taxable_income: float, base_tax: float, total_tds_paid: float) -> RegimeResult:
-    tax_with_cess = base_tax * 1.04
+    tax_with_cess = round_half_up(base_tax * 1.04)
     net = tax_with_cess - total_tds_paid
     return RegimeResult(
         taxable_income=round(taxable_income),
         base_tax=round(base_tax),
-        tax_with_cess=round(tax_with_cess),
+        tax_with_cess=tax_with_cess,
         net_payable=round(abs(net)),
         is_refund=net < 0,
     )
@@ -167,7 +216,7 @@ def calculate_tax(data: TaxInput):
     # New regime: only standard deduction + employer NPS allowed
     new_salary_income = max(0.0, data.gross_salary - STANDARD_DEDUCTION_NEW - data.nps_employer)
     new_taxable_income = max(0.0, new_salary_income + other_income_total)
-    new_base_tax = compute_new_regime_tax(new_taxable_income, data.fy)
+    new_base_tax, _ = compute_new_regime_tax(new_taxable_income, data.fy)
     new_result = build_regime_result(new_taxable_income, new_base_tax, total_tds_paid)
 
     # Old regime: exemptions + Chapter VI-A deductions + employer NPS all allowed
@@ -179,7 +228,7 @@ def calculate_tax(data: TaxInput):
         0.0, data.gross_salary - total_exemptions - STANDARD_DEDUCTION_OLD - data.nps_employer
     )
     old_taxable_income = max(0.0, old_salary_income + other_income_total - total_chapter_via)
-    old_base_tax = compute_old_regime_tax(old_taxable_income, data.age_group)
+    old_base_tax, _ = compute_old_regime_tax(old_taxable_income, data.age_group)
     old_result = build_regime_result(old_taxable_income, old_base_tax, total_tds_paid)
 
     if new_result.tax_with_cess < old_result.tax_with_cess:
@@ -387,7 +436,10 @@ async def extract_document(file: UploadFile = File(...), doc_type: str = Form(..
 # ---------------------------------------------------------------------------
 # FULL ANALYSIS: reconcile payslips vs Form 16, categorize every AIS/TIS
 # income item per the Income Tax Act, compute salary + other-sources TDS
-# separately, and estimate 234B/234C interest.
+# separately, and estimate 234B/234C interest — following the same rounding
+# conventions (Sec 288A / 288B, floor-to-nearest-100 before applying the
+# monthly 234B/234C rate) used by professional ITR computation software, so
+# the numbers reconcile exactly against a CA-prepared computation sheet.
 # ---------------------------------------------------------------------------
 
 # How each TIS category should be treated under the Income Tax Act.
@@ -459,11 +511,19 @@ def split_ais_salary_vs_other_tds(text: str):
     return sum_quarterly(salary_block), sum_quarterly(rest_block)
 
 
+def fy_ay_start_dates(fy_string: str):
+    """Returns (fy_start, ay_start) for the given 'FY 2025-26' / 'FY 2024-25' string."""
+    fy_start_year = 2025 if "2025-26" in fy_string else 2024
+    fy_start = date(fy_start_year, 4, 1)
+    ay_start = date(fy_start_year + 1, 4, 1)
+    return fy_start, ay_start
+
+
 def months_elapsed_since_fy_start(fy_string: str, today=None) -> int:
     """Months from 1 April of the Assessment Year to today — part of a month
     counts as a full month, per Section 234B."""
     today = today or datetime.now().date()
-    ay_start = date(2026, 4, 1) if "2025-26" in fy_string else date(2025, 4, 1)
+    _, ay_start = fy_ay_start_dates(fy_string)
     if today < ay_start:
         return 0
     months = (today.year - ay_start.year) * 12 + (today.month - ay_start.month)
@@ -472,41 +532,118 @@ def months_elapsed_since_fy_start(fy_string: str, today=None) -> int:
     return max(0, months)
 
 
-def compute_234b(total_tax: float, total_tds: float, advance_tax_paid: float, fy_string: str):
-    """Section 234B: the 'assessed tax' this section actually tests against is
-    total tax MINUS TDS already credited — not the gross tax figure. Advance
-    tax paid separately (not TDS) is then checked against 90% of that net
-    figure. If assessed tax (after TDS) is ≤ ₹10,000, there's no advance-tax
-    obligation at all (Section 208), so no interest applies either."""
-    assessed_tax = total_tax - total_tds
-    months = months_elapsed_since_fy_start(fy_string)
-    if assessed_tax <= 10000:
-        return 0, months
-    if advance_tax_paid >= 0.9 * assessed_tax:
-        return 0, months
-    shortfall = assessed_tax - advance_tax_paid
-    return round(shortfall * 0.01 * months), months
+def add_months(d: date, n: int) -> date:
+    month_index = d.month - 1 + n
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, 1)
 
 
-def compute_234c(total_tax: float, total_tds: float, advance_tax_paid: float = 0):
-    """Section 234C: checked against the same net-of-TDS 'assessed tax' base
-    as 234B. Advance tax paid separately (not TDS, which is already netted
-    out of the base) is compared against each installment checkpoint
-    (15%/45%/75%/100% by 15 Jun/Sep/Dec/Mar). Each checkpoint's interest is
-    rounded individually before summing, matching how this is computed in
-    practice. Same Section 208 threshold as 234B applies: if the net-of-TDS
-    liability is ≤ ₹10,000, there's no advance-tax obligation at all, so no
-    234C interest either."""
-    assessed_tax = total_tax - total_tds
-    if assessed_tax <= 10000:
-        return 0
-    checkpoints = [(0.15, 3), (0.45, 3), (0.75, 3), (1.00, 1)]
+def compute_234b_detailed(assessed_tax: float, fy: str, today=None):
+    """Section 234B, computed exactly as ITR software does it: the assessed
+    tax (total tax minus TDS minus advance tax already paid) is floored to
+    the nearest Rs 100 BEFORE the 1%/month rate is applied. If assessed tax
+    is <= Rs 10,000, there's no advance-tax obligation at all (Section 208),
+    so no interest applies either."""
+    months = months_elapsed_since_fy_start(fy, today)
+    if assessed_tax <= SECTION_208_THRESHOLD or months <= 0:
+        return 0, months, []
+
+    principal_rounded = floor_100(assessed_tax)
+    monthly_interest = round_half_up(principal_rounded * 0.01)
+    _, ay_start = fy_ay_start_dates(fy)
+    breakdown = []
     total_interest = 0
-    for required_pct, months in checkpoints:
-        required = assessed_tax * required_pct
+    for i in range(months):
+        m = add_months(ay_start, i)
+        breakdown.append({
+            "month": m.strftime("%B-%Y"),
+            "principal": round(assessed_tax),
+            "interest": monthly_interest,
+        })
+        total_interest += monthly_interest
+    return total_interest, months, breakdown
+
+
+def compute_234c_detailed(
+    full_tax_with_cess: float,
+    total_tds: float,
+    advance_tax_paid: float,
+    fy: str,
+    today=None,
+):
+    """Section 234C, computed against four installment checkpoints
+    (15%/45%/75%/100% by 15 Jun / 15 Sep / 15 Dec / 15 Mar). Same floor-to-
+    Rs-100 rounding as 234B is applied to each checkpoint's shortfall before
+    the rate is applied.
+
+    No capital-gains transfer date is required from the user: any checkpoint
+    whose due date hasn't occurred yet as of today is simply skipped (there's
+    no advance-tax shortfall for an installment that hasn't come due), and
+    every checkpoint that HAS occurred uses the full assessed tax (including
+    VDA/capital gains) — the same simplified convention professional ITR
+    software itself offers as a toggle ("calculate from start of year" rather
+    than "from date of sale"). This keeps everything document-driven with no
+    manual date entry, at the cost of a small, always-conservative (never an
+    underestimate) overstatement of 234C in the rare case a large capital
+    gain arose late in the year."""
+    today = today or datetime.now().date()
+    full_assessed = full_tax_with_cess - total_tds
+    if full_assessed <= SECTION_208_THRESHOLD:
+        return 0, []
+
+    fy_start_year = 2025 if "2025-26" in fy else 2024
+    checkpoints = [
+        (0.15, 3, "First (Up to 15 Jun)", date(fy_start_year, 6, 15)),
+        (0.45, 3, "Second (Up to 15 Sep)", date(fy_start_year, 9, 15)),
+        (0.75, 3, "Third (Up to 15 Dec)", date(fy_start_year, 12, 15)),
+        (1.00, 1, "Fourth (Up to 15 Mar)", date(fy_start_year + 1, 3, 15)),
+    ]
+
+    breakdown = []
+    total_interest = 0
+    for pct, months, label, due_date in checkpoints:
+        if due_date > today:
+            continue  # installment hasn't come due yet - no shortfall possible
+
+        assessed_for_checkpoint = max(0.0, full_assessed)
+        required = round_half_up(assessed_for_checkpoint * pct)
         shortfall = max(0, required - advance_tax_paid)
-        total_interest += round(shortfall * 0.01 * months)
-    return total_interest
+        shortfall_rounded = floor_100(shortfall)
+        interest = round_half_up(shortfall_rounded * 0.01 * months)
+        total_interest += interest
+        breakdown.append({
+            "installment": label,
+            "required_pct": pct * 100,
+            "required_amount": required,
+            "remaining_due_rounded": shortfall_rounded,
+            "months": months,
+            "interest": interest,
+        })
+    return total_interest, breakdown
+
+
+class SlabBreakdownItem(BaseModel):
+    from_amount: int
+    to_amount: int
+    rate_pct: float
+    taxable_amount: int
+    tax: int
+
+
+class InterestMonthItem(BaseModel):
+    month: str
+    principal: int
+    interest: int
+
+
+class InterestCheckpointItem(BaseModel):
+    installment: str
+    required_pct: float
+    required_amount: int
+    remaining_due_rounded: int
+    months: int
+    interest: int
 
 
 class IncomeItem(BaseModel):
@@ -532,15 +669,31 @@ class TDSReconciliation(BaseModel):
 
 
 class RegimeFullResult(BaseModel):
+    salary_income: int
+    gross_total_income: int
+    total_income_rounded_288a: int
+    normal_income: int
+    slab_tax_breakdown: list[SlabBreakdownItem]
+    slab_tax: int
+    special_rate_income: int
+    special_rate_tax: int
+    base_tax: int
+    cess: int
     taxable_income: int
     slab_tax_with_cess: int
     vda_tax_with_cess: int
     total_tax: int
     total_tds_paid: int
+    advance_tax_paid: int
     net_before_interest: int
     interest_234b: int
     interest_234c: int
     months_elapsed_234b: int
+    interest_234b_breakdown: list[InterestMonthItem]
+    interest_234c_breakdown: list[InterestCheckpointItem]
+    amount_before_288b: int
+    rounded_288b: int
+    self_assessment_tax_paid: int
     final_amount: int
     is_refund: bool
 
@@ -559,25 +712,29 @@ class FullAnalysisResult(BaseModel):
     itr_due_date_note: str
 
 
-@app.post("/full-analysis", response_model=FullAnalysisResult)
-async def full_analysis(
-    fy: str = Form(...),
-    age_group: str = Form("Below 60"),
-    nps_employer: float = Form(0.0),
-    hra_exemption: float = Form(0.0),
-    lta_exemption: float = Form(0.0),
-    other_exemptions: float = Form(0.0),
-    ded_80c: float = Form(0.0),
-    ded_80ccd1b: float = Form(0.0),
-    ded_80d: float = Form(0.0),
-    ded_80tta_ttb: float = Form(0.0),
-    ded_other: float = Form(0.0),
-    advance_tax: float = Form(0.0),
-    payslips: list[UploadFile] = File(default=[]),
-    form16: UploadFile | None = File(default=None),
-    ais: UploadFile | None = File(default=None),
-    tis: UploadFile | None = File(default=None),
-):
+async def run_full_analysis(
+    fy: str,
+    age_group: str,
+    nps_employer: float,
+    hra_exemption: float,
+    lta_exemption: float,
+    other_exemptions: float,
+    ded_80c: float,
+    ded_80ccd1b: float,
+    ded_80d: float,
+    ded_80tta_ttb: float,
+    ded_other: float,
+    advance_tax: float,
+    self_assessment_tax_paid: float,
+    additional_vda_income: float,
+    payslips: list[UploadFile],
+    form16: UploadFile | None,
+    ais: UploadFile | None,
+    tis: UploadFile | None,
+) -> FullAnalysisResult:
+    """Shared computation core used by both /full-analysis (JSON for the UI)
+    and /export-excel (the downloadable workbook) — kept as one function so
+    the two can never drift apart."""
     # --- Read and extract ALL documents concurrently (instead of one after
     # another) — this is the main lever we control for speed, since the PDF
     # parsing itself is CPU-bound but independent per document. ---
@@ -686,52 +843,102 @@ async def full_analysis(
             elif treatment == "non_income":
                 non_income_total += row["amount"]
 
+    # Manual top-up for VDA / capital gains income not picked up from TIS
+    # (e.g. TIS summary table doesn't carry per-transaction dates).
+    vda_income_total += additional_vda_income
+
     # --- Tax calculation, both regimes ---
     def calc_regime(is_new_regime: bool) -> RegimeFullResult:
         if is_new_regime:
             salary_income = max(0.0, final_gross_salary - STANDARD_DEDUCTION_NEW - nps_employer)
-            taxable_income = max(0.0, salary_income + slab_other_income_total)
-            slab_tax = compute_new_regime_tax(taxable_income, fy)
+            normal_income_unrounded = max(0.0, salary_income + slab_other_income_total)
         else:
             total_exemptions = hra_exemption + lta_exemption + other_exemptions
             total_via = ded_80c + ded_80ccd1b + ded_80d + ded_80tta_ttb + ded_other
             salary_income = max(0.0, final_gross_salary - total_exemptions - STANDARD_DEDUCTION_OLD - nps_employer)
-            taxable_income = max(0.0, salary_income + slab_other_income_total - total_via)
-            slab_tax = compute_old_regime_tax(taxable_income, age_group)
+            normal_income_unrounded = max(0.0, salary_income + slab_other_income_total - total_via)
 
-        slab_tax_with_cess = slab_tax * 1.04
-        # VDA: flat 30% + cess, no deductions, same treatment in both regimes
-        vda_tax_with_cess = vda_income_total * 0.30 * 1.04
-        total_tax = slab_tax_with_cess + vda_tax_with_cess
+        gross_total_income = normal_income_unrounded + vda_income_total
+        total_income_rounded_288a = round_10(gross_total_income)
+
+        # Section 288A rounding is applied to the "normal" (slab-rate) income
+        # BEFORE slab tax is computed — special-rate (VDA) income is taxed
+        # separately on its unrounded value.
+        normal_income_rounded = round_10(normal_income_unrounded)
+        if is_new_regime:
+            slab_tax_raw, slab_breakdown_raw = compute_new_regime_tax(normal_income_rounded, fy)
+        else:
+            slab_tax_raw, slab_breakdown_raw = compute_old_regime_tax(normal_income_rounded, age_group)
+
+        slab_tax = round(slab_tax_raw)
+        slab_breakdown = [
+            SlabBreakdownItem(
+                from_amount=b["from"], to_amount=b["to"], rate_pct=b["rate_pct"],
+                taxable_amount=b["taxable_amount"], tax=b["tax"],
+            ) for b in slab_breakdown_raw
+        ]
+
+        # VDA / capital gains: flat 30% + cess, no deductions, Sec 115BBH —
+        # same treatment in both regimes.
+        special_rate_tax = round_half_up(vda_income_total * 0.30)
+
+        base_tax = slab_tax + special_rate_tax
+        cess = round_half_up(base_tax * 0.04)
+        total_tax_with_cess = base_tax + cess
+
+        # Kept for backward compatibility / simpler summary display.
+        slab_tax_with_cess = round_half_up(slab_tax * 1.04)
+        vda_tax_with_cess = round_half_up(special_rate_tax * 1.04)
 
         total_tds = tds_recon.total_tds
-        net_before_interest = total_tax - total_tds - advance_tax
+        net_before_interest = total_tax_with_cess - total_tds - advance_tax
 
-        if net_before_interest > 0:
-            interest_b, months_b = compute_234b(total_tax, total_tds, advance_tax, fy)
-            interest_c = compute_234c(total_tax, total_tds, advance_tax)
+        assessed_tax = total_tax_with_cess - total_tds - advance_tax
+        if assessed_tax > 0:
+            interest_b, months_b, breakdown_b = compute_234b_detailed(assessed_tax, fy)
+            interest_c, breakdown_c = compute_234c_detailed(
+                total_tax_with_cess, total_tds, advance_tax, fy,
+            )
         else:
-            interest_b, months_b = 0, months_elapsed_since_fy_start(fy)
-            interest_c = 0
+            interest_b, months_b, breakdown_b = 0, months_elapsed_since_fy_start(fy), []
+            interest_c, breakdown_c = 0, []
 
-        final_amount = net_before_interest + interest_b + interest_c
+        amount_before_288b = net_before_interest + interest_b + interest_c
+        rounded_288b = round_10(amount_before_288b)
+        final_after_self_assessment = rounded_288b - self_assessment_tax_paid
 
         return RegimeFullResult(
-            taxable_income=round(taxable_income),
-            slab_tax_with_cess=round(slab_tax_with_cess),
-            vda_tax_with_cess=round(vda_tax_with_cess),
-            total_tax=round(total_tax),
+            salary_income=round(salary_income),
+            gross_total_income=round(gross_total_income),
+            total_income_rounded_288a=total_income_rounded_288a,
+            normal_income=round(normal_income_rounded),
+            slab_tax_breakdown=slab_breakdown,
+            slab_tax=slab_tax,
+            special_rate_income=round(vda_income_total),
+            special_rate_tax=special_rate_tax,
+            base_tax=base_tax,
+            cess=cess,
+            taxable_income=round(normal_income_rounded + vda_income_total),
+            slab_tax_with_cess=slab_tax_with_cess,
+            vda_tax_with_cess=vda_tax_with_cess,
+            total_tax=total_tax_with_cess,
             total_tds_paid=round(total_tds),
+            advance_tax_paid=round(advance_tax),
             net_before_interest=round(net_before_interest),
             interest_234b=interest_b,
             interest_234c=interest_c,
             months_elapsed_234b=months_b,
-            final_amount=round(abs(final_amount)),
-            is_refund=final_amount < 0,
+            interest_234b_breakdown=[InterestMonthItem(**m) for m in breakdown_b],
+            interest_234c_breakdown=[InterestCheckpointItem(**c) for c in breakdown_c],
+            amount_before_288b=round(amount_before_288b),
+            rounded_288b=rounded_288b,
+            self_assessment_tax_paid=round(self_assessment_tax_paid),
+            final_amount=round(abs(final_after_self_assessment)),
+            is_refund=final_after_self_assessment < 0,
         )
 
     today = datetime.now().date()
-    ay_start = date(2026, 4, 1) if "2025-26" in fy else date(2025, 4, 1)
+    _, ay_start = fy_ay_start_dates(fy)
     itr_due_date = date(ay_start.year, 7, 31)
     if today <= itr_due_date:
         due_note = f"Today ({today.strftime('%d %b %Y')}) is before the {itr_due_date.strftime('%d %b %Y')} ITR filing deadline — 234B is calculated only for the months actually elapsed so far, not the full year."
@@ -756,4 +963,339 @@ async def full_analysis(
         ),
         calculation_date=today.strftime("%d %b %Y"),
         itr_due_date_note=due_note,
+    )
+
+
+# ---------------------------------------------------------------------------
+# EXCEL EXPORT: a professionally formatted, multi-sheet workbook mirroring
+# the Detailed Computation view - Summary, Income & TDS Detail, and one
+# fully-worked sheet per regime.
+# ---------------------------------------------------------------------------
+
+INR_FMT = '#,##,##0;[RED]-#,##,##0'
+XL_PRIMARY = "0E7C6B"
+XL_PRIMARY_DARK = "0A5C4F"
+XL_GOLD = "B7791F"
+XL_LIGHT_BG = "F4F6F8"
+XL_INK = "1A2027"
+XL_INK_MUTED = "6B7280"
+XL_BORDER = "D9DCE1"
+XL_WHITE = "FFFFFF"
+
+_thin_side = Side(style="thin", color=XL_BORDER)
+_TABLE_BORDER = Border(left=_thin_side, right=_thin_side, top=_thin_side, bottom=_thin_side)
+
+
+def _sheet_title(ws, title, subtitle, n_cols):
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+    cell = ws.cell(row=1, column=1, value=title)
+    cell.font = Font(name="Calibri", size=16, bold=True, color=XL_WHITE)
+    cell.fill = PatternFill("solid", fgColor=XL_PRIMARY_DARK)
+    cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 32
+
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=n_cols)
+    sub = ws.cell(row=2, column=1, value=subtitle)
+    sub.font = Font(name="Calibri", size=10, italic=True, color=XL_WHITE)
+    sub.fill = PatternFill("solid", fgColor=XL_PRIMARY)
+    sub.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[2].height = 20
+    return 4
+
+
+def _section_header(ws, row, n_cols, text):
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_cols)
+    cell = ws.cell(row=row, column=1, value=text)
+    cell.font = Font(name="Calibri", size=11, bold=True, color=XL_WHITE)
+    cell.fill = PatternFill("solid", fgColor=XL_PRIMARY)
+    cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[row].height = 20
+    return row + 1
+
+
+def _kv_row(ws, row, label, value, n_cols, bold=False, indent=0, fmt=INR_FMT, is_total=False, muted=False):
+    label_cell = ws.cell(row=row, column=1, value=("   " * indent) + label)
+    label_cell.font = Font(name="Calibri", size=10, bold=bold, italic=muted,
+                            color=XL_INK_MUTED if muted else XL_INK)
+    if n_cols > 2:
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=n_cols - 1)
+    value_cell = ws.cell(row=row, column=n_cols, value=value)
+    value_cell.font = Font(name="Calibri", size=10, bold=bold, color=XL_INK)
+    if isinstance(value, (int, float)):
+        value_cell.number_format = fmt
+    value_cell.alignment = Alignment(horizontal="right")
+    if is_total:
+        top = Side(style="thin", color=XL_INK_MUTED)
+        label_cell.border = Border(top=top)
+        value_cell.border = Border(top=top)
+    return row + 1
+
+
+def _data_table(ws, row, headers, rows, col_widths=None):
+    """Writes a bordered, header-styled table starting at `row`, returns the
+    next free row. `rows` is a list of tuples matching `headers` length."""
+    n_cols = len(headers)
+    for c, h in enumerate(headers, start=1):
+        cell = ws.cell(row=row, column=c, value=h)
+        cell.font = Font(name="Calibri", size=9, bold=True, color=XL_WHITE)
+        cell.fill = PatternFill("solid", fgColor=XL_PRIMARY_DARK)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = _TABLE_BORDER
+    row += 1
+    for r_i, data_row in enumerate(rows):
+        for c, val in enumerate(data_row, start=1):
+            cell = ws.cell(row=row, column=c, value=val)
+            cell.border = _TABLE_BORDER
+            cell.font = Font(name="Calibri", size=9.5, color=XL_INK)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                cell.number_format = INR_FMT
+                cell.alignment = Alignment(horizontal="right")
+            else:
+                cell.alignment = Alignment(horizontal="left")
+            if r_i % 2 == 1:
+                cell.fill = PatternFill("solid", fgColor=XL_LIGHT_BG)
+        row += 1
+    return row
+
+
+def _write_regime_sheet(ws, result: FullAnalysisResult, regime: RegimeFullResult, label: str, fy: str):
+    n_cols = 4
+    row = _sheet_title(ws, f"Detailed Computation - {label}", f"{fy} | Calculated as of {result.calculation_date}", n_cols)
+
+    row = _section_header(ws, row, n_cols, "Computation of Total Income")
+    std_ded = STANDARD_DEDUCTION_NEW if "New" in label else STANDARD_DEDUCTION_OLD
+    row = _kv_row(ws, row, "Gross Salary", result.salary.final_gross_salary, n_cols, indent=1, muted=True)
+    row = _kv_row(ws, row, "Less: Standard Deduction", -std_ded, n_cols, indent=1, muted=True)
+    row = _kv_row(ws, row, "Income from Salary", regime.salary_income, n_cols, bold=True)
+    row = _kv_row(ws, row, "Income from Other Sources", result.slab_other_income_total, n_cols)
+    if regime.special_rate_income > 0:
+        row = _kv_row(ws, row, "Income from Capital Gains (VDA - Sec 115BBH)", regime.special_rate_income, n_cols)
+    row = _kv_row(ws, row, "Gross Total Income", regime.gross_total_income, n_cols, bold=True, is_total=True)
+    row = _kv_row(ws, row, "Round off u/s 288A", regime.total_income_rounded_288a, n_cols)
+    row += 1
+
+    row = _section_header(ws, row, n_cols, f"Tax on Normal Income (Rs {regime.normal_income:,})")
+    if regime.slab_tax_breakdown:
+        row = _data_table(
+            ws, row, ["Slab From", "Slab To", "Rate", "Tax"],
+            [(b.from_amount, b.to_amount, f"{b.rate_pct}%", b.tax) for b in regime.slab_tax_breakdown],
+        )
+    else:
+        row = _kv_row(ws, row, "No slab tax - within rebate/exemption limit", "", n_cols, muted=True)
+    row = _kv_row(ws, row, "Tax on Normal Income", regime.slab_tax, n_cols, bold=True, is_total=True)
+    if regime.special_rate_income > 0:
+        row = _kv_row(ws, row, "Tax on Special Rate Income (VDA @ 30%)", regime.special_rate_tax, n_cols)
+    row = _kv_row(ws, row, "Total Tax", regime.base_tax, n_cols, bold=True, is_total=True)
+    row = _kv_row(ws, row, "Health & Education Cess @ 4%", regime.cess, n_cols)
+    row = _kv_row(ws, row, "Total Tax + Cess", regime.total_tax, n_cols, bold=True, is_total=True)
+    row += 1
+
+    row = _section_header(ws, row, n_cols, "Prepaid Taxes")
+    row = _kv_row(ws, row, "T.D.S. - Salary", -result.tds.salary_tds_used, n_cols)
+    row = _kv_row(ws, row, "T.D.S. - Non-Salary", -result.tds.other_sources_tds, n_cols)
+    if regime.advance_tax_paid > 0:
+        row = _kv_row(ws, row, "Advance Tax Paid", -regime.advance_tax_paid, n_cols)
+    row = _kv_row(ws, row, "Balance (before interest)", regime.net_before_interest, n_cols, bold=True, is_total=True)
+    row += 1
+
+    if regime.interest_234b > 0:
+        row = _section_header(ws, row, n_cols, "Interest Calculation u/s 234B")
+        row = _data_table(
+            ws, row, ["Month", "Principal", "Interest @ 1%"],
+            [(m.month, m.principal, m.interest) for m in regime.interest_234b_breakdown],
+        )
+        row = _kv_row(ws, row, "Total Interest u/s 234B", regime.interest_234b, n_cols, bold=True, is_total=True)
+        row += 1
+
+    if regime.interest_234c > 0:
+        row = _section_header(ws, row, n_cols, "Interest Calculation u/s 234C")
+        row = _data_table(
+            ws, row, ["Installment", "Required %", "Required Amt", "Remaining Due (rounded)", "Interest"],
+            [(c.installment, f"{c.required_pct}%", c.required_amount, c.remaining_due_rounded, c.interest)
+             for c in regime.interest_234c_breakdown],
+        )
+        row = _kv_row(ws, row, "Total Interest u/s 234C", regime.interest_234c, n_cols, bold=True, is_total=True)
+        row += 1
+
+    row = _section_header(ws, row, n_cols, "Final Settlement")
+    row = _kv_row(ws, row, "Balance + Interest (234B + 234C)", regime.amount_before_288b, n_cols)
+    row = _kv_row(ws, row, "Round off u/s 288B", regime.rounded_288b, n_cols)
+    if regime.self_assessment_tax_paid > 0:
+        row = _kv_row(ws, row, "Less: Self-Assessment Tax Deposited (u/s 140A)", -regime.self_assessment_tax_paid, n_cols)
+    final_label = "Refund Due" if regime.is_refund else "Tax Payable"
+    final_cell_row = row
+    row = _kv_row(ws, row, final_label, regime.final_amount, n_cols, bold=True, is_total=True)
+    for c in range(1, n_cols + 1):
+        ws.cell(row=final_cell_row, column=c).fill = PatternFill(
+            "solid", fgColor="FCF3E3" if not regime.is_refund else "E6F4F1"
+        )
+
+    ws.column_dimensions["A"].width = 42
+    for col in ["B", "C", "D"]:
+        ws.column_dimensions[col].width = 16
+    ws.sheet_view.showGridLines = False
+
+
+def build_excel_workbook(result: FullAnalysisResult, fy: str, age_group: str) -> io.BytesIO:
+    wb = Workbook()
+
+    # --- Summary sheet ---
+    ws = wb.active
+    ws.title = "Summary"
+    n_cols = 3
+    row = _sheet_title(ws, "Income Tax Computation Summary", f"{fy} | Age category: {age_group} | Calculated as of {result.calculation_date}", n_cols)
+
+    headers_row = row
+    ws.cell(row=row, column=1, value="").fill = PatternFill("solid", fgColor=XL_PRIMARY_DARK)
+    for c, h in enumerate(["Figure", "New Regime", "Old Regime"], start=1):
+        cell = ws.cell(row=row, column=c, value=h)
+        cell.font = Font(name="Calibri", size=10, bold=True, color=XL_WHITE)
+        cell.fill = PatternFill("solid", fgColor=XL_PRIMARY_DARK)
+        cell.alignment = Alignment(horizontal="center" if c > 1 else "left", indent=1 if c == 1 else 0)
+        cell.border = _TABLE_BORDER
+    row += 1
+
+    def summary_row(label, new_val, old_val, bold=False, is_total=False):
+        nonlocal row
+        cells = [
+            (1, label, "left"),
+            (2, new_val, "right"),
+            (3, old_val, "right"),
+        ]
+        for c, val, align in cells:
+            cell = ws.cell(row=row, column=c, value=val)
+            cell.font = Font(name="Calibri", size=10, bold=bold, color=XL_INK)
+            cell.alignment = Alignment(horizontal=align)
+            cell.border = _TABLE_BORDER
+            if isinstance(val, (int, float)):
+                cell.number_format = INR_FMT
+            if row % 2 == 1:
+                cell.fill = PatternFill("solid", fgColor=XL_LIGHT_BG)
+        row += 1
+
+    summary_row("Gross Total Income", result.new_regime.gross_total_income, result.old_regime.gross_total_income)
+    summary_row("Total Income (rounded u/s 288A)", result.new_regime.total_income_rounded_288a, result.old_regime.total_income_rounded_288a)
+    summary_row("Tax on Normal Income", result.new_regime.slab_tax, result.old_regime.slab_tax)
+    summary_row("Tax on Special Rate Income (VDA)", result.new_regime.special_rate_tax, result.old_regime.special_rate_tax)
+    summary_row("Total Tax + Cess", result.new_regime.total_tax, result.old_regime.total_tax, bold=True)
+    summary_row("Total TDS Paid", result.new_regime.total_tds_paid, result.old_regime.total_tds_paid)
+    summary_row("Interest u/s 234B", result.new_regime.interest_234b, result.old_regime.interest_234b)
+    summary_row("Interest u/s 234C", result.new_regime.interest_234c, result.old_regime.interest_234c)
+    summary_row("Self-Assessment Tax Deposited", result.new_regime.self_assessment_tax_paid, result.old_regime.self_assessment_tax_paid)
+    summary_row(
+        "FINAL AMOUNT (Payable / Refund)",
+        (-result.new_regime.final_amount if result.new_regime.is_refund else result.new_regime.final_amount),
+        (-result.old_regime.final_amount if result.old_regime.is_refund else result.old_regime.final_amount),
+        bold=True, is_total=True,
+    )
+    row += 1
+    note = ws.cell(row=row, column=1, value="Negative figures in the final row indicate a refund due to you, not an amount payable.")
+    note.font = Font(name="Calibri", size=9, italic=True, color=XL_INK_MUTED)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_cols)
+
+    ws.column_dimensions["A"].width = 38
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
+    ws.sheet_view.showGridLines = False
+
+    # --- Income & TDS detail sheet ---
+    ws2 = wb.create_sheet("Income & TDS Detail")
+    row = _sheet_title(ws2, "Income & TDS Reconciliation", f"{fy} | Calculated as of {result.calculation_date}", 3)
+    row = _section_header(ws2, row, 3, "Salary Reconciliation")
+    row = _kv_row(ws2, row, "Payslip total (summed)", result.salary.payslip_total or 0, 3)
+    row = _kv_row(ws2, row, "Form 16 gross salary", result.salary.form16_total or 0, 3)
+    row = _kv_row(ws2, row, "Additional income identified & added", result.salary.additional_income_identified, 3)
+    row = _kv_row(ws2, row, "Final gross salary used", result.salary.final_gross_salary, 3, bold=True, is_total=True)
+    row += 1
+    row = _section_header(ws2, row, 3, "TDS Reconciliation")
+    row = _kv_row(ws2, row, "Salary TDS used", result.tds.salary_tds_used, 3)
+    row = _kv_row(ws2, row, "TDS on other income (AIS)", result.tds.other_sources_tds, 3)
+    row = _kv_row(ws2, row, "Total TDS paid", result.tds.total_tds, 3, bold=True, is_total=True)
+    row += 1
+    if result.other_income_items:
+        row = _section_header(ws2, row, 3, "Other Income - Categorized per Income Tax Act")
+        row = _data_table(
+            ws2, row, ["Category", "Amount", "Treatment"],
+            [(i.category, i.amount, i.treatment.replace("_", " ").title()) for i in result.other_income_items],
+        )
+    ws2.column_dimensions["A"].width = 42
+    ws2.column_dimensions["B"].width = 18
+    ws2.column_dimensions["C"].width = 22
+    ws2.sheet_view.showGridLines = False
+
+    # --- One detailed sheet per regime ---
+    ws_new = wb.create_sheet("New Regime")
+    _write_regime_sheet(ws_new, result, result.new_regime, "New Regime (Sec 115BAC)", fy)
+
+    ws_old = wb.create_sheet("Old Regime")
+    _write_regime_sheet(ws_old, result, result.old_regime, "Old Regime", fy)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+@app.post("/full-analysis", response_model=FullAnalysisResult)
+async def full_analysis(
+    fy: str = Form(...),
+    age_group: str = Form("Below 60"),
+    nps_employer: float = Form(0.0),
+    hra_exemption: float = Form(0.0),
+    lta_exemption: float = Form(0.0),
+    other_exemptions: float = Form(0.0),
+    ded_80c: float = Form(0.0),
+    ded_80ccd1b: float = Form(0.0),
+    ded_80d: float = Form(0.0),
+    ded_80tta_ttb: float = Form(0.0),
+    ded_other: float = Form(0.0),
+    advance_tax: float = Form(0.0),
+    self_assessment_tax_paid: float = Form(0.0),
+    additional_vda_income: float = Form(0.0),
+    payslips: list[UploadFile] = File(default=[]),
+    form16: UploadFile | None = File(default=None),
+    ais: UploadFile | None = File(default=None),
+    tis: UploadFile | None = File(default=None),
+):
+    return await run_full_analysis(
+        fy, age_group, nps_employer, hra_exemption, lta_exemption, other_exemptions,
+        ded_80c, ded_80ccd1b, ded_80d, ded_80tta_ttb, ded_other,
+        advance_tax, self_assessment_tax_paid, additional_vda_income,
+        payslips, form16, ais, tis,
+    )
+
+
+@app.post("/export-excel")
+async def export_excel(
+    fy: str = Form(...),
+    age_group: str = Form("Below 60"),
+    nps_employer: float = Form(0.0),
+    hra_exemption: float = Form(0.0),
+    lta_exemption: float = Form(0.0),
+    other_exemptions: float = Form(0.0),
+    ded_80c: float = Form(0.0),
+    ded_80ccd1b: float = Form(0.0),
+    ded_80d: float = Form(0.0),
+    ded_80tta_ttb: float = Form(0.0),
+    ded_other: float = Form(0.0),
+    advance_tax: float = Form(0.0),
+    self_assessment_tax_paid: float = Form(0.0),
+    additional_vda_income: float = Form(0.0),
+    payslips: list[UploadFile] = File(default=[]),
+    form16: UploadFile | None = File(default=None),
+    ais: UploadFile | None = File(default=None),
+    tis: UploadFile | None = File(default=None),
+):
+    result = await run_full_analysis(
+        fy, age_group, nps_employer, hra_exemption, lta_exemption, other_exemptions,
+        ded_80c, ded_80ccd1b, ded_80d, ded_80tta_ttb, ded_other,
+        advance_tax, self_assessment_tax_paid, additional_vda_income,
+        payslips, form16, ais, tis,
+    )
+    workbook_bytes = build_excel_workbook(result, fy, age_group)
+    filename = f"Tax_Computation_{fy.replace(' ', '_')}.xlsx"
+    return StreamingResponse(
+        workbook_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

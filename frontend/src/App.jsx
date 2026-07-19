@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import "./App.css";
 
 const API_URL = "https://ledger-tax-app.onrender.com";
+
+const STANDARD_DEDUCTION = { new: 75000, old: 50000 };
 
 const TREATMENT_LABELS = {
   slab_other_income: { label: "Taxed at slab rate", cls: "tag-slab" },
@@ -20,6 +22,17 @@ function formatINR(value) {
   }).format(value);
 }
 
+function formatPlain(value) {
+  if (value === null || value === undefined) return "-";
+  return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(value);
+}
+
+const emptyDetails = {
+  nps_employer: "", hra_exemption: "", lta_exemption: "", other_exemptions: "",
+  ded_80c: "", ded_80ccd1b: "", ded_80d: "", ded_80tta_ttb: "", ded_other: "",
+  advance_tax: "", self_assessment_tax_paid: "", additional_vda_income: "",
+};
+
 export default function App() {
   const [fy, setFy] = useState("FY 2025-26");
   const [ageGroup, setAgeGroup] = useState("Below 60");
@@ -29,36 +42,44 @@ export default function App() {
   const [aisFile, setAisFile] = useState(null);
   const [tisFile, setTisFile] = useState(null);
 
-  const [details, setDetails] = useState({
-    nps_employer: "", hra_exemption: "", lta_exemption: "", other_exemptions: "",
-    ded_80c: "", ded_80ccd1b: "", ded_80d: "", ded_80tta_ttb: "", ded_other: "",
-    advance_tax: "",
-  });
+  const [details, setDetails] = useState(emptyDetails);
 
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [downloadingExcel, setDownloadingExcel] = useState(false);
   const [error, setError] = useState(null);
+  const [selectedRegime, setSelectedRegime] = useState("new"); // "new" | "old"
+
+  useEffect(() => {
+    if (result?.new_regime && result?.old_regime) {
+      const netSigned = (r) => (r.is_refund ? -r.final_amount : r.final_amount);
+      setSelectedRegime(netSigned(result.new_regime) <= netSigned(result.old_regime) ? "new" : "old");
+    }
+  }, [result]);
 
   const handleDetailChange = (key, value) => {
     setDetails((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const buildFormData = () => {
+    const fd = new FormData();
+    fd.append("fy", fy);
+    fd.append("age_group", ageGroup);
+    Object.entries(details).forEach(([key, value]) => {
+      fd.append(key, parseFloat(value) || 0);
+    });
+    payslipFiles.forEach((f) => fd.append("payslips", f));
+    if (form16File) fd.append("form16", form16File);
+    if (aisFile) fd.append("ais", aisFile);
+    if (tisFile) fd.append("tis", tisFile);
+    return fd;
   };
 
   const handleAnalyze = async () => {
     setLoading(true);
     setError(null);
     try {
-      const fd = new FormData();
-      fd.append("fy", fy);
-      fd.append("age_group", ageGroup);
-      Object.entries(details).forEach(([key, value]) => {
-        fd.append(key, parseFloat(value) || 0);
-      });
-      payslipFiles.forEach((f) => fd.append("payslips", f));
-      if (form16File) fd.append("form16", form16File);
-      if (aisFile) fd.append("ais", aisFile);
-      if (tisFile) fd.append("tis", tisFile);
-
-      const res = await fetch(`${API_URL}/full-analysis`, { method: "POST", body: fd });
+      const res = await fetch(`${API_URL}/full-analysis`, { method: "POST", body: buildFormData() });
       if (!res.ok) throw new Error("Analysis failed - check the API is running.");
       const data = await res.json();
       setResult(data);
@@ -69,16 +90,34 @@ export default function App() {
     }
   };
 
+  const handleDownloadExcel = async () => {
+    setDownloadingExcel(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}/export-excel`, { method: "POST", body: buildFormData() });
+      if (!res.ok) throw new Error("Excel export failed - check the API is running.");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Tax_Computation_${fy.replace(/\s+/g, "_")}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloadingExcel(false);
+    }
+  };
+
   const handleReset = () => {
     setPayslipFiles([]);
     setForm16File(null);
     setAisFile(null);
     setTisFile(null);
-    setDetails({
-      nps_employer: "", hra_exemption: "", lta_exemption: "", other_exemptions: "",
-      ded_80c: "", ded_80ccd1b: "", ded_80d: "", ded_80tta_ttb: "", ded_other: "",
-      advance_tax: "",
-    });
+    setDetails(emptyDetails);
     setResult(null);
     setError(null);
   };
@@ -88,10 +127,11 @@ export default function App() {
     result?.salary?.payslip_total != null &&
     result.salary.additional_income_identified === 0;
 
-  const renderRegimeCard = (label, regime, isBest) => {
+  const renderRegimeCard = (key, label, regime, isBest) => {
     if (!regime || !result) return null;
+    const isSelected = selectedRegime === key;
     return (
-      <div className={`card regime-card ${isBest ? "best" : ""}`}>
+      <div className={`card regime-card ${isBest ? "best" : ""} ${isSelected ? "selected" : ""}`}>
         <div className="regime-head">
           <span className="regime-name">{label}</span>
           {isBest && <span className="best-badge">Better for you</span>}
@@ -119,6 +159,12 @@ export default function App() {
           <span>Less: TDS from other income</span>
           <span className="figure">- {formatINR(result.tds.other_sources_tds)}</span>
         </div>
+        {regime.advance_tax_paid > 0 && (
+          <div className="regime-row">
+            <span>Less: Advance tax paid</span>
+            <span className="figure">- {formatINR(regime.advance_tax_paid)}</span>
+          </div>
+        )}
 
         <div className="regime-row subtotal">
           <span>Net amount (before interest)</span>
@@ -142,11 +188,229 @@ export default function App() {
           </div>
         )}
 
+        {regime.self_assessment_tax_paid > 0 && (
+          <div className="regime-row">
+            <span>Less: Self-assessment tax already deposited (u/s 140A)</span>
+            <span className="figure">- {formatINR(regime.self_assessment_tax_paid)}</span>
+          </div>
+        )}
+
         <div className="regime-final">
           <span className="regime-final-label">{regime.is_refund ? "Net refundable" : "Net payable"}</span>
           <span className={`regime-final-amount ${regime.is_refund ? "refund" : "payable"}`}>
             {formatINR(regime.final_amount)}
           </span>
+        </div>
+
+        <button
+          className={`btn-select-regime ${isSelected ? "active" : ""}`}
+          onClick={() => setSelectedRegime(key)}
+        >
+          {isSelected ? "Selected for detailed computation" : "Use this regime"}
+        </button>
+      </div>
+    );
+  };
+
+  const renderSlabBreakdown = (breakdown) => {
+    if (!breakdown || breakdown.length === 0) {
+      return <p className="detail-note">No slab tax - income within the rebate/exemption limit.</p>;
+    }
+    return (
+      <table className="detail-table">
+        <thead>
+          <tr>
+            <th>Slab</th>
+            <th>Rate</th>
+            <th>Amount in slab</th>
+            <th>Tax</th>
+          </tr>
+        </thead>
+        <tbody>
+          {breakdown.map((b, i) => (
+            <tr key={i}>
+              <td>{formatPlain(b.from_amount)} - {formatPlain(b.to_amount)}</td>
+              <td>{b.rate_pct}%</td>
+              <td>{formatPlain(b.taxable_amount)}</td>
+              <td>{formatPlain(b.tax)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
+
+  const renderDetailedComputation = () => {
+    if (!result) return null;
+    const key = selectedRegime;
+    const regime = key === "new" ? result.new_regime : result.old_regime;
+    const label = key === "new" ? "New Regime (Sec 115BAC)" : "Old Regime";
+    if (!regime) return null;
+
+    return (
+      <div className="card detail-card">
+        <div className="card-header">
+          <span className="card-title">Detailed Computation - {label}</span>
+        </div>
+        <p className="card-note">
+          Line-by-line computation following the same conventions used in professional ITR
+          computation sheets - Section 288A/288B rounding, and Section 234B/234C interest
+          rounded down to the nearest Rs 100 before the monthly rate is applied.
+        </p>
+
+        <div className="detail-section">
+          <div className="detail-section-title">Computation of Total Income</div>
+          <div className="detail-row">
+            <span>Income from Salary</span>
+            <span className="figure">{formatINR(regime.salary_income)}</span>
+          </div>
+          <div className="detail-row sub">
+            <span>Gross Salary</span>
+            <span className="figure">{formatINR(result.salary.final_gross_salary)}</span>
+          </div>
+          <div className="detail-row sub">
+            <span>Less: Standard Deduction</span>
+            <span className="figure">- {formatINR(STANDARD_DEDUCTION[key])}</span>
+          </div>
+          <div className="detail-row">
+            <span>Income from Other Sources</span>
+            <span className="figure">{formatINR(result.slab_other_income_total)}</span>
+          </div>
+          {result.vda_income_total > 0 && (
+            <div className="detail-row">
+              <span>Income from Capital Gains (VDA - Sec 115BBH)</span>
+              <span className="figure">{formatINR(regime.special_rate_income)}</span>
+            </div>
+          )}
+          <div className="detail-row total">
+            <span>Gross Total Income</span>
+            <span className="figure">{formatINR(regime.gross_total_income)}</span>
+          </div>
+          <div className="detail-row">
+            <span>Round off u/s 288A</span>
+            <span className="figure">{formatINR(regime.total_income_rounded_288a)}</span>
+          </div>
+        </div>
+
+        <div className="detail-section">
+          <div className="detail-section-title">Tax on Normal Income (Rs {formatPlain(regime.normal_income)})</div>
+          {renderSlabBreakdown(regime.slab_tax_breakdown)}
+          <div className="detail-row total">
+            <span>Tax on Normal Income</span>
+            <span className="figure">{formatINR(regime.slab_tax)}</span>
+          </div>
+          {regime.special_rate_income > 0 && (
+            <div className="detail-row">
+              <span>Tax on Special Rate Income (VDA @ 30%)</span>
+              <span className="figure">{formatINR(regime.special_rate_tax)}</span>
+            </div>
+          )}
+          <div className="detail-row total">
+            <span>Total Tax</span>
+            <span className="figure">{formatINR(regime.base_tax)}</span>
+          </div>
+          <div className="detail-row">
+            <span>Health &amp; Education Cess @ 4%</span>
+            <span className="figure">{formatINR(regime.cess)}</span>
+          </div>
+          <div className="detail-row total">
+            <span>Total Tax + Cess</span>
+            <span className="figure">{formatINR(regime.total_tax)}</span>
+          </div>
+        </div>
+
+        <div className="detail-section">
+          <div className="detail-section-title">Prepaid Taxes</div>
+          <div className="detail-row">
+            <span>T.D.S. - Salary</span>
+            <span className="figure">- {formatINR(result.tds.salary_tds_used)}</span>
+          </div>
+          <div className="detail-row">
+            <span>T.D.S. - Non-Salary</span>
+            <span className="figure">- {formatINR(result.tds.other_sources_tds)}</span>
+          </div>
+          {regime.advance_tax_paid > 0 && (
+            <div className="detail-row">
+              <span>Advance Tax Paid</span>
+              <span className="figure">- {formatINR(regime.advance_tax_paid)}</span>
+            </div>
+          )}
+          <div className="detail-row total">
+            <span>Balance (before interest)</span>
+            <span className="figure">{formatINR(regime.net_before_interest)}</span>
+          </div>
+        </div>
+
+        {(regime.interest_234b > 0) && (
+          <div className="detail-section">
+            <div className="detail-section-title">Interest Calculation u/s 234B</div>
+            <table className="detail-table">
+              <thead>
+                <tr><th>Month</th><th>Principal</th><th>Interest @ 1%</th></tr>
+              </thead>
+              <tbody>
+                {regime.interest_234b_breakdown.map((m, i) => (
+                  <tr key={i}>
+                    <td>{m.month}</td>
+                    <td>{formatPlain(m.principal)}</td>
+                    <td>{formatPlain(m.interest)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="detail-row total">
+              <span>Total Interest u/s 234B</span>
+              <span className="figure">{formatINR(regime.interest_234b)}</span>
+            </div>
+          </div>
+        )}
+
+        {(regime.interest_234c > 0) && (
+          <div className="detail-section">
+            <div className="detail-section-title">Interest Calculation u/s 234C</div>
+            <table className="detail-table">
+              <thead>
+                <tr><th>Installment</th><th>Required %</th><th>Required Amt</th><th>Remaining Due (rounded)</th><th>Interest</th></tr>
+              </thead>
+              <tbody>
+                {regime.interest_234c_breakdown.map((c, i) => (
+                  <tr key={i}>
+                    <td>{c.installment}</td>
+                    <td>{c.required_pct}%</td>
+                    <td>{formatPlain(c.required_amount)}</td>
+                    <td>{formatPlain(c.remaining_due_rounded)}</td>
+                    <td>{formatPlain(c.interest)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="detail-row total">
+              <span>Total Interest u/s 234C</span>
+              <span className="figure">{formatINR(regime.interest_234c)}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="detail-section">
+          <div className="detail-section-title">Final Settlement</div>
+          <div className="detail-row">
+            <span>Balance + Interest (234B + 234C)</span>
+            <span className="figure">{formatINR(regime.amount_before_288b)}</span>
+          </div>
+          <div className="detail-row">
+            <span>Round off u/s 288B</span>
+            <span className="figure">{formatINR(regime.rounded_288b)}</span>
+          </div>
+          {regime.self_assessment_tax_paid > 0 && (
+            <div className="detail-row">
+              <span>Less: Self-assessment tax deposited (u/s 140A)</span>
+              <span className="figure">- {formatINR(regime.self_assessment_tax_paid)}</span>
+            </div>
+          )}
+          <div className="detail-row final-highlight">
+            <span>{regime.is_refund ? "Refund Due" : "Tax Payable"}</span>
+            <span className="figure">{formatINR(regime.final_amount)}</span>
+          </div>
         </div>
       </div>
     );
@@ -262,7 +526,7 @@ export default function App() {
           <div className="card">
             <div className="card-header">
               <div className="card-icon">NPS</div>
-              <span className="card-title">NPS &amp; Advance Tax</span>
+              <span className="card-title">NPS, Advance &amp; Self-Assessment Tax</span>
             </div>
             <div className="entry-row">
               <div className="entry-label"><span>Employer NPS - 80CCD(2)</span><small>Allowed in both regimes</small></div>
@@ -272,10 +536,35 @@ export default function App() {
               </div>
             </div>
             <div className="entry-row">
-              <div className="entry-label"><span>Advance tax already paid</span><small>If any</small></div>
+              <div className="entry-label"><span>Advance tax paid</span><small>Paid during the year, before 31 Mar</small></div>
               <div className="entry-input">
                 <span className="rupee">Rs.</span>
                 <input type="number" placeholder="0" value={details.advance_tax} onChange={(e) => handleDetailChange("advance_tax", e.target.value)} />
+              </div>
+            </div>
+            <div className="entry-row">
+              <div className="entry-label"><span>Self-assessment tax deposited</span><small>Paid u/s 140A at return filing time - reduces final payable but not 234B/234C</small></div>
+              <div className="entry-input">
+                <span className="rupee">Rs.</span>
+                <input type="number" placeholder="0" value={details.self_assessment_tax_paid} onChange={(e) => handleDetailChange("self_assessment_tax_paid", e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-header">
+              <div className="card-icon">VDA</div>
+              <span className="card-title">Capital Gains / Virtual Digital Assets</span>
+            </div>
+            <p className="card-note">
+              Auto-detected from your TIS - no need to enter a transfer date. Only use this field to add
+              income not picked up automatically.
+            </p>
+            <div className="entry-row">
+              <div className="entry-label"><span>Additional VDA / capital gains income</span><small>Added on top of anything found in TIS</small></div>
+              <div className="entry-input">
+                <span className="rupee">Rs.</span>
+                <input type="number" placeholder="0" value={details.additional_vda_income} onChange={(e) => handleDetailChange("additional_vda_income", e.target.value)} />
               </div>
             </div>
           </div>
@@ -366,6 +655,39 @@ export default function App() {
                   <span>Calculated as of {result.calculation_date} - {result.itr_due_date_note}</span>
                 </div>
 
+                <div className="card final-banner">
+                  <div className="final-banner-top">
+                    <span className="final-banner-title">Final Amount Payable</span>
+                    <div className="regime-switch">
+                      <button
+                        className={selectedRegime === "new" ? "active" : ""}
+                        onClick={() => setSelectedRegime("new")}
+                      >
+                        New Regime
+                      </button>
+                      <button
+                        className={selectedRegime === "old" ? "active" : ""}
+                        onClick={() => setSelectedRegime("old")}
+                      >
+                        Old Regime
+                      </button>
+                    </div>
+                  </div>
+                  {(() => {
+                    const regime = selectedRegime === "new" ? result.new_regime : result.old_regime;
+                    return (
+                      <>
+                        <span className={`final-banner-amount ${regime.is_refund ? "refund" : "payable"}`}>
+                          {formatINR(regime.final_amount)}
+                        </span>
+                        <span className="final-banner-label">
+                          {regime.is_refund ? "refundable to you" : "payable by you"} - matches the {selectedRegime === "new" ? "New" : "Old"} Regime card and Detailed Computation below
+                        </span>
+                      </>
+                    );
+                  })()}
+                </div>
+
                 <div className="card recon-card">
                   <div className="recon-status-row">
                     <span className={`status-badge ${salaryMatches ? "match" : "mismatch"}`}>
@@ -446,17 +768,34 @@ export default function App() {
                   const newIsBetter = netSigned(result.new_regime) <= netSigned(result.old_regime);
                   return (
                     <>
-                      {renderRegimeCard("New Regime", result.new_regime, newIsBetter)}
-                      {renderRegimeCard("Old Regime", result.old_regime, !newIsBetter)}
+                      {renderRegimeCard("new", "New Regime", result.new_regime, newIsBetter)}
+                      {renderRegimeCard("old", "Old Regime", result.old_regime, !newIsBetter)}
                     </>
                   );
                 })()}
 
+                {renderDetailedComputation()}
+
+                <div className="card download-card">
+                  <div className="download-card-text">
+                    <span className="card-title">Download Full Computation</span>
+                    <p className="card-note">
+                      A formatted Excel workbook - Summary, Income &amp; TDS Detail, and a fully worked
+                      sheet for each regime, matching the Detailed Computation above.
+                    </p>
+                  </div>
+                  <button className="btn-primary btn-download" onClick={handleDownloadExcel} disabled={downloadingExcel}>
+                    {downloadingExcel ? "Preparing..." : "Download Excel"}
+                  </button>
+                </div>
+
                 <p className="disclaimer-footer">
                   For personal tracking only. Not a substitute for filing your ITR or advice from a CA.
-                  234B/234C interest figures are simplified estimates - the actual computation during
-                  assessment may differ. Does not account for capital gains, house property income, or
-                  surcharge on very high incomes.
+                  234B/234C figures follow Section 288A/288B rounding and the floor-to-nearest-Rs-100
+                  convention used by ITR computation software. 234C is calculated using the full assessed
+                  tax for every installment that has already come due, without needing a capital-gains
+                  transfer date - a small, always-conservative simplification. Does not account for house
+                  property income or surcharge on very high incomes.
                 </p>
               </>
             )}

@@ -782,3 +782,246 @@ body {
   color: var(--ink-faint);
   padding: 4px 8px;
 }
+
+/* ---------- FINAL AMOUNT BANNER ---------- */
+
+.final-banner {
+  background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+  border: none;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.final-banner-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.final-banner-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.regime-switch {
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.regime-switch button {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  padding: 7px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.regime-switch button.active {
+  background: white;
+  color: var(--primary-dark);
+}
+
+.final-banner-amount {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 2.4rem;
+  font-variant-numeric: tabular-nums;
+  color: white;
+}
+
+.final-banner-label {
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.5;
+}
+
+/* ---------- REGIME CARD SELECTION ---------- */
+
+.regime-card.selected {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px var(--gold-soft), var(--shadow-md);
+}
+
+.btn-select-regime {
+  margin-top: 14px;
+  width: 100%;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.82rem;
+  background: var(--bg);
+  color: var(--ink-muted);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.btn-select-regime:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+.btn-select-regime.active {
+  background: var(--gold-soft);
+  color: var(--gold);
+  border-color: var(--gold);
+  cursor: default;
+}
+
+/* ---------- DETAILED COMPUTATION CARD ---------- */
+
+.detail-card {
+  border-radius: 18px;
+}
+
+.detail-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--card-border);
+}
+
+.detail-section:first-of-type {
+  margin-top: 4px;
+  padding-top: 0;
+  border-top: none;
+}
+
+.detail-section-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--primary-dark);
+  margin-bottom: 10px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  padding: 6px 0;
+}
+
+.detail-row.sub {
+  padding-left: 14px;
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+
+.detail-row.total {
+  border-top: 1px dashed var(--card-border);
+  margin-top: 4px;
+  padding-top: 10px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.detail-row.final-highlight {
+  border-top: 2px solid var(--card-border);
+  margin-top: 8px;
+  padding-top: 14px;
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--gold);
+}
+
+.detail-note {
+  font-size: 0.82rem;
+  color: var(--ink-faint);
+  font-style: italic;
+  margin: 4px 0;
+}
+
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  margin: 8px 0;
+}
+
+.detail-table th {
+  text-align: right;
+  font-weight: 600;
+  color: var(--ink-faint);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--card-border);
+  white-space: nowrap;
+}
+
+.detail-table th:first-child {
+  text-align: left;
+}
+
+.detail-table td {
+  text-align: right;
+  padding: 6px 8px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--card-border);
+  white-space: nowrap;
+}
+
+.detail-table td:first-child {
+  text-align: left;
+  font-family: var(--font-body);
+  white-space: normal;
+}
+
+.entry-input input[type="date"] {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  width: 100%;
+}
+
+/* ---------- DOWNLOAD CARD ---------- */
+
+.download-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: var(--primary-soft);
+  border-color: rgba(14, 124, 107, 0.25);
+}
+
+.download-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+}
+
+.download-card .card-note {
+  margin: 0;
+}
+
+.btn-download {
+  flex: none;
+  white-space: nowrap;
+  padding: 13px 22px;
+}
