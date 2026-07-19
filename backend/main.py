@@ -585,37 +585,65 @@ def _parse_date_token(part1: str, part2: str, part3: str):
 
 
 def extract_vda_transfer_date(text: str, fy: str):
-    """Best-effort, fully automatic: scans the block of AIS/TIS text around
-    any 'virtual digital asset' mention for a transaction date, and returns
-    the EARLIEST plausible date found within the relevant FY (the earliest
-    transaction is what matters for 234C - if ANY VDA income arose before a
-    checkpoint, that checkpoint must include it). Returns None if nothing
-    confidently found, in which case 234C falls back to the safe full-year
-    simplification rather than guessing."""
+    """Best-effort, fully automatic: locates the 'Receipts on transfer of
+    virtual digital asset' block in AIS text and returns the LATEST
+    transaction date found within it (bounded to that section only, so
+    dates from an unrelated section that follows - e.g. outward foreign
+    remittance - never leak in).
+
+    AIS reports each VDA sale as a separate dated row (e.g. 31/05/2025 and
+    16/06/2025 for two disposals that together make up one reported total).
+    Real computation software treats the whole reported amount as a single
+    transaction dated at the LAST of those rows rather than prorating tax
+    across each one - using the latest date here reproduces that same
+    convention, so 234C matches a CA-prepared computation sheet. Returns
+    None if nothing confidently found, in which case 234C falls back to the
+    safe full-year simplification rather than guessing."""
     if not text:
         return None
     fy_start, ay_start = fy_ay_start_dates(fy)
     fy_end = date(ay_start.year, 3, 31)
 
     lower = text.lower()
-    idx = lower.find("virtual digital asset")
+    idx = lower.find("receipts on transfer of virtual digital asset")
+    if idx == -1:
+        idx = lower.find("virtual digital asset")
     if idx == -1:
         return None
-    window = text[max(0, idx - 200): idx + 1000]
+
+    # Bound the block to just this category: keep consuming lines that are
+    # either row/label continuations (start with a digit, "SR." or "(") -
+    # stop at the first line that looks like the start of the NEXT category
+    # header, so we never wander into an unrelated section.
+    lines = text[idx:].splitlines()
+    block_lines = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if i > 0 and stripped and not re.match(r"^(SR\.?\s*NO\.?|\d|\()", stripped, re.IGNORECASE):
+            break
+        block_lines.append(line)
+        if len(block_lines) > 40:
+            break
+    block = "\n".join(block_lines)
 
     candidates = []
-    for m in re.finditer(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", window):
-        c = _parse_date_token(m.group(1), m.group(2), m.group(3))
-        if c and fy_start <= c <= fy_end:
-            candidates.append(c)
-    for m in re.finditer(
-        r"(\d{1,2})[-\s](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-\s](\d{4})",
-        window, re.IGNORECASE,
-    ):
-        c = _parse_date_token(m.group(1), m.group(2), m.group(3))
-        if c and fy_start <= c <= fy_end:
-            candidates.append(c)
-    return min(candidates) if candidates else None
+    # Prefer the precise per-transaction row format used throughout AIS:
+    # "<sr> Q#(Mon-Mon) DD/MM/YYYY <amount paid/credited> <tds> <tds> <status>"
+    for line in block.splitlines():
+        if re.match(r"^\d+\s+Q\d\(", line.strip()):
+            m = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", line)
+            if m:
+                c = _parse_date_token(m.group(1), m.group(2), m.group(3))
+                if c and fy_start <= c <= fy_end:
+                    candidates.append(c)
+    if not candidates:
+        # Fallback: any date-like token anywhere in the bounded block.
+        for m in re.finditer(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", block):
+            c = _parse_date_token(m.group(1), m.group(2), m.group(3))
+            if c and fy_start <= c <= fy_end:
+                candidates.append(c)
+
+    return max(candidates) if candidates else None
 
 
 def compute_234c_detailed(
